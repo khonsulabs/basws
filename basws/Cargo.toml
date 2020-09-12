@@ -1,0 +1,15 @@
+[package]
+name = "basws"
+version = "0.1.0"
+authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
+edition = "2018"
+
+[features]
+default = []
+server = ["basws-server"]
+client = ["basws-client"]
+
+[dependencies]
+basws-shared = { path = "../basws-shared" }
+basws-server = { path = "../basws-server", optional = true }
+basws-client = { path = "../basws-client", optional = true }
