@@ -5,7 +5,6 @@ use basws_shared::{
     protocol::ServerError,
     protocol::ServerRequest,
     protocol::{ServerResponse, WsBatchResponse, WsRequest},
-    timing::NetworkTiming,
 };
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
@@ -75,12 +74,7 @@ where
             }
         });
 
-        let client = Arc::new(RwLock::new(ConnectedClient {
-            account: None,
-            installation_id: None,
-            network_timing: NetworkTiming::default(),
-            sender: sender.clone(),
-        }));
+        let client = Arc::new(RwLock::new(ConnectedClient::new(sender.clone())));
         while let Some(result) = rx.next().await {
             match result {
                 Ok(message) => {
@@ -156,6 +150,7 @@ where
                 Some(account_id) => *account_id,
                 None => return,
             };
+            data.account_by_installation.remove(&installation_id);
 
             let remove_account =
                 if let Some(installations) = data.installations_by_account.get_mut(&account_id) {
@@ -330,50 +325,78 @@ mod tests {
     use super::*;
     use crate::logic::WebsocketServerLogic;
     use async_trait::async_trait;
+    use maplit::hashmap;
+    use serde_derive::{Deserialize, Serialize};
 
-    struct TestServer;
+    struct TestServer {
+        logged_in_installations: HashMap<Uuid, i64>,
+        accounts: HashMap<i64, TestAccount>,
+        protocol_version: String,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+    struct TestAccount(i64);
 
     #[async_trait]
     #[allow(clippy::unit_arg)]
     impl WebsocketServerLogic for TestServer {
         type Request = ();
         type Response = ();
-        type Account = ();
+        type Account = TestAccount;
         type AccountId = i64;
 
         async fn handle_request(
             &self,
-            request: Self::Request,
+            _request: Self::Request,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
-            todo!()
+            unimplemented!()
         }
 
         async fn lookup_account_from_installation_id(
             &self,
             installation_id: Uuid,
         ) -> anyhow::Result<Option<AccountProfile<Self::AccountId, Self::Account>>> {
-            todo!()
+            Ok(self
+                .logged_in_installations
+                .get(&installation_id)
+                .map(|account_id| {
+                    self.accounts
+                        .get(account_id)
+                        .cloned()
+                        .map(|account| AccountProfile {
+                            id: *account_id,
+                            account,
+                        })
+                })
+                .flatten())
         }
 
         fn check_protocol_version(&self, version: &str) -> ErrorHandling {
-            todo!()
+            if self.protocol_version == version {
+                ErrorHandling::StayConnected
+            } else {
+                ErrorHandling::Disconnect
+            }
         }
 
-        async fn lookup_or_create_installation(&self, installation_id: Uuid) -> anyhow::Result<()> {
-            todo!()
+        async fn lookup_or_create_installation(
+            &self,
+            _installation_id: Uuid,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
         }
 
         async fn client_reconnected(
             &self,
-            installation_id: Uuid,
-            account: AccountHandle<Self::AccountId, Self::Account>,
+            _installation_id: Uuid,
+            _account: AccountHandle<Self::AccountId, Self::Account>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             todo!()
         }
 
         async fn new_installation_connected(
             &self,
-            installation_id: Uuid,
+            _installation_id: Uuid,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             todo!()
         }
@@ -381,8 +404,110 @@ mod tests {
 
     #[async_test]
     async fn simulated_events() -> anyhow::Result<()> {
-        let server = WebsocketServer::new(TestServer);
-        let installation_1 = Uuid::new_v4();
+        let installation_no_account = Uuid::new_v4();
+        let (sender, _) = async_channel::unbounded();
+        let client_no_account = Arc::new(RwLock::new(ConnectedClient::new_with_installation_id(
+            installation_no_account,
+            sender,
+        )));
+        let installation_has_account = Uuid::new_v4();
+        let (sender, _) = async_channel::unbounded();
+        let client_has_account = Arc::new(RwLock::new(ConnectedClient::new_with_installation_id(
+            installation_has_account,
+            sender,
+        )));
+
+        let server = WebsocketServer::new(TestServer {
+            logged_in_installations: hashmap! {
+                installation_has_account => 1,
+            },
+            accounts: hashmap! {
+                1 => TestAccount(1),
+            },
+            protocol_version: "1".to_string(),
+        });
+
+        server
+            .connect(installation_no_account, &client_no_account)
+            .await;
+
+        {
+            let data = server.clients.read().await;
+            assert_eq!(1, data.clients.len());
+            assert!(Arc::ptr_eq(
+                &data.clients[&installation_no_account],
+                &client_no_account
+            ));
+            assert_eq!(0, data.account_by_installation.len());
+            assert_eq!(0, data.installations_by_account.len());
+
+            let accounts = server.accounts_by_id.read().await;
+            assert_eq!(0, accounts.len());
+        }
+
+        server
+            .connect(installation_has_account, &client_has_account)
+            .await;
+
+        {
+            let data = server.clients.read().await;
+            assert_eq!(2, data.clients.len());
+            assert!(Arc::ptr_eq(
+                &data.clients[&installation_has_account],
+                &client_has_account
+            ));
+            assert_eq!(0, data.account_by_installation.len());
+            assert_eq!(0, data.installations_by_account.len());
+
+            let accounts = server.accounts_by_id.read().await;
+            assert_eq!(0, accounts.len());
+        }
+
+        let account = server
+            .lookup_account_from_installation_id(installation_has_account)
+            .await?
+            .unwrap();
+        server
+            .associate_account(installation_has_account, account)
+            .await?;
+
+        {
+            let data = server.clients.read().await;
+            assert_eq!(2, data.clients.len());
+            assert!(Arc::ptr_eq(
+                &data.clients[&installation_has_account],
+                &client_has_account
+            ));
+            assert_eq!(1, data.account_by_installation.len());
+            assert_eq!(1, data.installations_by_account.len());
+
+            let accounts = server.accounts_by_id.read().await;
+            assert_eq!(1, accounts.len());
+        }
+
+        server.disconnect(client_no_account).await;
+
+        {
+            let data = server.clients.read().await;
+            assert_eq!(1, data.clients.len());
+            assert_eq!(1, data.account_by_installation.len());
+            assert_eq!(1, data.installations_by_account.len());
+
+            let accounts = server.accounts_by_id.read().await;
+            assert_eq!(1, accounts.len());
+        }
+
+        server.disconnect(client_has_account).await;
+
+        {
+            let data = server.clients.read().await;
+            assert_eq!(0, data.clients.len());
+            assert_eq!(0, data.account_by_installation.len());
+            assert_eq!(0, data.installations_by_account.len());
+
+            let accounts = server.accounts_by_id.read().await;
+            assert_eq!(0, accounts.len());
+        }
 
         Ok(())
     }
