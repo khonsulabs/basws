@@ -37,4 +37,8 @@ where
             network_timing: Default::default(),
         }
     }
+
+    pub async fn send(&self, response: WsBatchResponse<L::Response>) -> anyhow::Result<()> {
+        Ok(self.sender.send(response).await?)
+    }
 }

@@ -17,6 +17,7 @@ static SERVER: OnceCell<RwLock<Box<dyn ServerPublicApi>>> = OnceCell::new();
 #[async_trait]
 pub(crate) trait ServerPublicApi: Send + Sync {
     async fn handle_connection(&self, ws: warp::ws::WebSocket);
+    fn as_any(&self) -> &'_ dyn std::any::Any;
 }
 
 pub type ConnectedClientHandle<L> = Arc<RwLock<ConnectedClient<L>>>;
@@ -111,6 +112,10 @@ where
 
         self.disconnect(client).await;
     }
+
+    fn as_any(&self) -> &'_ dyn std::any::Any {
+        self
+    }
 }
 
 impl<L> WebsocketServer<L>
@@ -132,6 +137,32 @@ where
     pub async fn incoming_connection(ws: warp::ws::WebSocket) {
         let server = SERVER.get().expect("Server never initialized").read().await;
         server.handle_connection(ws).await
+    }
+
+    pub async fn send_to_installation_id(installation_id: Uuid, response: L::Response) {
+        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = server.as_any().downcast_ref::<Self>().unwrap();
+        let data = server.clients.read().await;
+        if let Some(client) = data.clients.get(&installation_id) {
+            let client = client.read().await;
+            let _ = client.send(WsBatchResponse::from_response(response)).await;
+        }
+    }
+
+    pub async fn send_to_account_id(account_id: L::AccountId, response: L::Response) {
+        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = server.as_any().downcast_ref::<Self>().unwrap();
+        let data = server.clients.read().await;
+        if let Some(clients) = data.installations_by_account.get(&account_id) {
+            for installation_id in clients {
+                if let Some(client) = data.clients.get(&installation_id) {
+                    let client = client.read().await;
+                    let _ = client
+                        .send(WsBatchResponse::from_response(response.clone()))
+                        .await;
+                }
+            }
+        }
     }
 
     async fn websocket_error(&self, error: warp::Error) -> ErrorHandling {

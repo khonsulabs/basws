@@ -28,6 +28,27 @@ pub struct WsBatchResponse<T> {
     pub results: Vec<ServerResponse<T>>,
 }
 
+impl<T> WsBatchResponse<T> {
+    pub fn new(request_id: i64, results: Vec<ServerResponse<T>>) -> Self {
+        Self {
+            request_id,
+            results,
+        }
+    }
+
+    pub fn from_result(result: ServerResponse<T>) -> Self {
+        Self::new(-1, vec![result])
+    }
+
+    pub fn from_results(results: Vec<ServerResponse<T>>) -> Self {
+        Self::new(-1, results)
+    }
+
+    pub fn from_response(response: T) -> Self {
+        Self::new(-1, vec![ServerResponse::Response(response)])
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ServerRequest<T> {
     Authenticate {
