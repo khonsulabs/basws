@@ -1,4 +1,4 @@
-use crate::{connected_client::ConnectedClient, WebsocketServerLogic};
+use crate::{connected_client::ConnectedClient, Identifiable, WebsocketServerLogic};
 use async_rwlock::RwLock;
 use async_trait::async_trait;
 use basws_shared::{
@@ -20,32 +20,33 @@ pub(crate) trait ServerPublicApi: Send + Sync {
     fn as_any(&self) -> &'_ dyn std::any::Any;
 }
 
-pub type ConnectedClientHandle<L> = Arc<RwLock<ConnectedClient<L>>>;
-pub type AccountMap<AccountId, Account> =
-    Arc<RwLock<HashMap<AccountId, AccountHandle<AccountId, Account>>>>;
-pub type AccountHandle<AccountId, Account> = Arc<RwLock<AccountProfile<AccountId, Account>>>;
+pub type ConnectedClientHandle<Response, Account> = Arc<RwLock<ConnectedClient<Response, Account>>>;
+#[allow(type_alias_bounds)] // This warning is a false positive. Without the bounds, we can't use ::Id
+pub type AccountMap<TAccount: Identifiable> =
+    Arc<RwLock<HashMap<TAccount::Id, AccountHandle<TAccount>>>>;
+pub type AccountHandle<Account> = Arc<RwLock<Account>>;
 
 pub struct WebsocketServer<L>
 where
     L: WebsocketServerLogic,
 {
     logic: L,
-    clients: RwLock<ClientData<L>>,
-    accounts_by_id: AccountMap<L::AccountId, L::Account>,
+    clients: RwLock<ClientData<L::Response, L::Account>>,
+    accounts_by_id: AccountMap<L::Account>,
 }
 
-struct ClientData<L>
+struct ClientData<Response, TAccount>
 where
-    L: WebsocketServerLogic,
+    TAccount: Identifiable,
 {
-    clients: HashMap<Uuid, ConnectedClientHandle<L>>,
-    installations_by_account: HashMap<L::AccountId, HashSet<Uuid>>,
-    account_by_installation: HashMap<Uuid, L::AccountId>,
+    clients: HashMap<Uuid, ConnectedClientHandle<Response, TAccount>>,
+    installations_by_account: HashMap<TAccount::Id, HashSet<Uuid>>,
+    account_by_installation: HashMap<Uuid, TAccount::Id>,
 }
 
-impl<L> Default for ClientData<L>
+impl<Response, TAccount> Default for ClientData<Response, TAccount>
 where
-    L: WebsocketServerLogic,
+    TAccount: Identifiable,
 {
     fn default() -> Self {
         Self {
@@ -169,7 +170,7 @@ where
         self.logic.handle_websocket_error(error).await
     }
 
-    async fn disconnect(&self, client: ConnectedClientHandle<L>) {
+    async fn disconnect(&self, client: ConnectedClientHandle<L::Response, L::Account>) {
         if let Some(installation_id) = {
             let client = client.read().await;
             client.installation_id
@@ -202,7 +203,7 @@ where
 
     async fn handle_request(
         &self,
-        client_handle: &ConnectedClientHandle<L>,
+        client_handle: &ConnectedClientHandle<L::Response, L::Account>,
         ws_request: WsRequest<L::Request>,
     ) -> Result<RequestHandling<L::Response>, anyhow::Error> {
         match ws_request.request {
@@ -246,11 +247,17 @@ where
                 client.network_timing.update(original_timestamp, timestamp);
                 Ok(RequestHandling::NoResponse)
             }
-            ServerRequest::Request(request) => self.logic.handle_request(request).await,
+            ServerRequest::Request(request) => {
+                self.logic.handle_request(client_handle, request).await
+            }
         }
     }
 
-    async fn connect(&self, installation_id: Uuid, client: &Arc<RwLock<ConnectedClient<L>>>) {
+    async fn connect(
+        &self,
+        installation_id: Uuid,
+        client: &ConnectedClientHandle<L::Response, L::Account>,
+    ) {
         let mut data = self.clients.write().await;
         data.clients.insert(installation_id, client.clone());
         {
@@ -262,8 +269,8 @@ where
     async fn associate_account(
         &self,
         installation_id: Uuid,
-        account: AccountHandle<L::AccountId, L::Account>,
-    ) -> anyhow::Result<AccountHandle<L::AccountId, L::Account>> {
+        account: AccountHandle<L::Account>,
+    ) -> anyhow::Result<AccountHandle<L::Account>> {
         // let account = self
         //     .lookup_account_from_installation_id(installation_id)
         //     .await?;
@@ -275,7 +282,7 @@ where
 
         let account_id = {
             let account = account.read().await;
-            account.id
+            account.id()
         };
 
         data.account_by_installation
@@ -291,7 +298,7 @@ where
     async fn lookup_account_from_installation_id(
         &self,
         installation_id: Uuid,
-    ) -> anyhow::Result<Option<Arc<RwLock<AccountProfile<L::AccountId, L::Account>>>>> {
+    ) -> anyhow::Result<Option<Arc<RwLock<L::Account>>>> {
         match self
             .logic
             .lookup_account_from_installation_id(installation_id)
@@ -301,7 +308,7 @@ where
                 let mut accounts_by_id = self.accounts_by_id.write().await;
                 Ok(Some(
                     accounts_by_id
-                        .entry(profile.id)
+                        .entry(profile.id())
                         .or_insert_with(|| Arc::new(RwLock::new(profile)))
                         .clone(),
                 ))
@@ -321,11 +328,6 @@ pub enum RequestHandling<R> {
     Error(ServerError),
     Respond(R),
     Batch(Vec<R>),
-}
-
-pub struct AccountProfile<AccountId, Account> {
-    pub id: AccountId,
-    pub account: Account,
 }
 
 impl<T> RequestHandling<T> {
@@ -368,6 +370,13 @@ mod tests {
     #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
     struct TestAccount(i64);
 
+    impl Identifiable for TestAccount {
+        type Id = i64;
+        fn id(&self) -> Self::Id {
+            self.0
+        }
+    }
+
     #[async_trait]
     #[allow(clippy::unit_arg)]
     impl WebsocketServerLogic for TestServer {
@@ -378,6 +387,7 @@ mod tests {
 
         async fn handle_request(
             &self,
+            _client: &ConnectedClientHandle<Self::Response, Self::Account>,
             _request: Self::Request,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             unimplemented!()
@@ -386,19 +396,11 @@ mod tests {
         async fn lookup_account_from_installation_id(
             &self,
             installation_id: Uuid,
-        ) -> anyhow::Result<Option<AccountProfile<Self::AccountId, Self::Account>>> {
+        ) -> anyhow::Result<Option<Self::Account>> {
             Ok(self
                 .logged_in_installations
                 .get(&installation_id)
-                .map(|account_id| {
-                    self.accounts
-                        .get(account_id)
-                        .cloned()
-                        .map(|account| AccountProfile {
-                            id: *account_id,
-                            account,
-                        })
-                })
+                .map(|account_id| self.accounts.get(account_id).cloned())
                 .flatten())
         }
 
@@ -420,7 +422,7 @@ mod tests {
         async fn client_reconnected(
             &self,
             _installation_id: Uuid,
-            _account: AccountHandle<Self::AccountId, Self::Account>,
+            _account: AccountHandle<Self::Account>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             todo!()
         }

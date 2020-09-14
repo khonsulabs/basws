@@ -1,30 +1,51 @@
 use async_trait::async_trait;
 use basws::server::{
-    AccountHandle, AccountProfile, ErrorHandling, RequestHandling, WebsocketServerLogic,
+    AccountHandle, ConnectedClientHandle, ErrorHandling, Identifiable, RequestHandling,
+    WebsocketServerLogic,
 };
+use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
+
 mod shared;
+use shared::chat::{ChatRequest, ChatResponse};
 
 struct ChatServer;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Account {
+    id: i64,
+    screenname: String,
+}
+
+impl Identifiable for Account {
+    type Id = i64;
+    fn id(&self) -> Self::Id {
+        self.id
+    }
+}
+
 #[async_trait]
 impl WebsocketServerLogic for ChatServer {
-    type Request = shared::chat::ChatRequest;
-    type Response = shared::chat::ChatResponse;
-    type Account = ();
+    type Request = ChatRequest;
+    type Response = ChatResponse;
+    type Account = Account;
     type AccountId = i64;
 
     async fn handle_request(
         &self,
+        client: &ConnectedClientHandle<Self::Response, Self::Account>,
         request: Self::Request,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
-        todo!()
+        match request {
+            ChatRequest::Login { username } => todo!(),
+            ChatRequest::Chat { message } => todo!(),
+        }
     }
 
     async fn lookup_account_from_installation_id(
         &self,
         installation_id: Uuid,
-    ) -> anyhow::Result<Option<AccountProfile<Self::AccountId, Self::Account>>> {
+    ) -> anyhow::Result<Option<Self::Account>> {
         todo!()
     }
 
@@ -39,7 +60,7 @@ impl WebsocketServerLogic for ChatServer {
     async fn client_reconnected(
         &self,
         installation_id: Uuid,
-        account: AccountHandle<Self::AccountId, Self::Account>,
+        account: AccountHandle<Self::Account>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         todo!()
     }

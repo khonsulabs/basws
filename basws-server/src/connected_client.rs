@@ -1,23 +1,20 @@
-use crate::{AccountHandle, WebsocketServerLogic};
+use crate::AccountHandle;
 use async_channel::Sender;
 use basws_shared::{protocol::WsBatchResponse, timing::NetworkTiming};
 use uuid::Uuid;
 
-pub struct ConnectedClient<L>
-where
-    L: WebsocketServerLogic,
-{
+pub struct ConnectedClient<Response, Account> {
     pub installation_id: Option<Uuid>,
-    sender: Sender<WsBatchResponse<L::Response>>,
-    pub account: Option<AccountHandle<L::AccountId, L::Account>>,
+    sender: Sender<WsBatchResponse<Response>>,
+    pub account: Option<AccountHandle<Account>>,
     pub network_timing: NetworkTiming,
 }
 
-impl<L> ConnectedClient<L>
+impl<Response, Account> ConnectedClient<Response, Account>
 where
-    L: WebsocketServerLogic,
+    Response: Send + Sync + 'static,
 {
-    pub fn new(sender: Sender<WsBatchResponse<L::Response>>) -> Self {
+    pub fn new(sender: Sender<WsBatchResponse<Response>>) -> Self {
         Self {
             sender,
             account: None,
@@ -28,7 +25,7 @@ where
 
     pub fn new_with_installation_id(
         installation_id: Uuid,
-        sender: Sender<WsBatchResponse<L::Response>>,
+        sender: Sender<WsBatchResponse<Response>>,
     ) -> Self {
         Self {
             sender,
@@ -38,7 +35,7 @@ where
         }
     }
 
-    pub async fn send(&self, response: WsBatchResponse<L::Response>) -> anyhow::Result<()> {
+    pub async fn send(&self, response: WsBatchResponse<Response>) -> anyhow::Result<()> {
         Ok(self.sender.send(response).await?)
     }
 }
