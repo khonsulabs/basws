@@ -13,3 +13,15 @@ client = ["basws-client"]
 basws-shared = { path = "../basws-shared" }
 basws-server = { path = "../basws-server", optional = true }
 basws-client = { path = "../basws-client", optional = true }
+
+[dev-dependencies]
+serde = "1"
+serde_derive = "1"
+uuid = { version = "0.8", features = ["v4", "serde"] }
+async-trait = "0.1"
+anyhow = "1"
+warp = "0.2"
+
+[[example]]
+name = "chat-server"
+required-features = ["basws-server"]
