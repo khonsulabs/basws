@@ -129,6 +129,7 @@ dependencies = [
  "async-trait",
  "basws-shared",
  "futures",
+ "once_cell",
  "serde",
  "serde_cbor",
  "tokio",

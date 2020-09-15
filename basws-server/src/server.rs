@@ -306,7 +306,7 @@ where
                             let request_id = ws_request.id;
                             match self.handle_request(&client, ws_request).await {
                                 Ok(responses) => {
-                                    if let Some(batch) = responses.into_batch(request_id) {
+                                    if let Some(batch) = responses.into_batch(Some(request_id)) {
                                         if sender.send(batch).await.is_err() {
                                             break;
                                         }
@@ -435,7 +435,7 @@ impl<T> ServerRequestHandling<T>
 where
     T: Clone,
 {
-    fn into_batch(self, request_id: i64) -> Option<WsBatchResponse<T>> {
+    fn into_batch(self, request_id: Option<u64>) -> Option<WsBatchResponse<T>> {
         let results = self.responses();
         if results.is_empty() {
             None
@@ -545,14 +545,14 @@ mod tests {
             _installation_id: Uuid,
             _account: Option<Handle<Self::Account>>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
-            todo!()
+            unimplemented!()
         }
 
         async fn new_installation_connected(
             &self,
             _installation_id: Uuid,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
-            todo!()
+            unimplemented!()
         }
     }
 

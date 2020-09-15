@@ -89,10 +89,14 @@ impl WebsocketClientLogic for ChatClient {
     async fn response_received(
         &self,
         response: Self::Response,
-        request_id: i64,
+        original_request_id: Option<u64>,
         client: Client<Self>,
     ) -> anyhow::Result<()> {
-        trace!("Received response {:?} to request {}", response, request_id);
+        trace!(
+            "Received response {:?} to request {:?}",
+            response,
+            original_request_id
+        );
         match response {
             ChatResponse::Unauthenticated => {
                 // This fake chat client will just choose a random name

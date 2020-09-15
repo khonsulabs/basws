@@ -4,18 +4,18 @@ use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WsRequest<T> {
-    pub id: i64,
+    pub id: u64,
     pub request: ServerRequest<T>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct WsBatchResponse<T> {
-    pub request_id: i64,
+    pub request_id: Option<u64>,
     pub results: Vec<ServerResponse<T>>,
 }
 
 impl<T> WsBatchResponse<T> {
-    pub fn new(request_id: i64, results: Vec<ServerResponse<T>>) -> Self {
+    pub fn new(request_id: Option<u64>, results: Vec<ServerResponse<T>>) -> Self {
         Self {
             request_id,
             results,
@@ -23,15 +23,15 @@ impl<T> WsBatchResponse<T> {
     }
 
     pub fn from_result(result: ServerResponse<T>) -> Self {
-        Self::new(-1, vec![result])
+        Self::new(None, vec![result])
     }
 
     pub fn from_results(results: Vec<ServerResponse<T>>) -> Self {
-        Self::new(-1, results)
+        Self::new(None, results)
     }
 
     pub fn from_response(response: T) -> Self {
-        Self::new(-1, vec![ServerResponse::Response(response)])
+        Self::new(None, vec![ServerResponse::Response(response)])
     }
 }
 

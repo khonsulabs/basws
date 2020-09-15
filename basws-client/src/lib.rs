@@ -10,11 +10,14 @@ use basws_shared::{
     Uuid,
 };
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
+use once_cell::sync::OnceCell;
 use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 pub use url::Url;
+
+static REQUEST_COUNTER: OnceCell<Handle<u64>> = OnceCell::new();
 
 #[derive(Debug, Clone)]
 pub enum LoginState {
@@ -39,7 +42,7 @@ pub trait WebsocketClientLogic: Send + Sync {
     async fn response_received(
         &self,
         response: Self::Response,
-        request_id: i64,
+        original_request_id: Option<u64>,
         client: Client<Self>,
     ) -> anyhow::Result<()>;
 
@@ -78,7 +81,6 @@ where
     receiver: Receiver<WsRequest<L::Request>>,
     average_roundtrip: f64,
     average_server_timestamp_delta: f64,
-    request_counter: i64,
 }
 
 impl<L> ClientData<L>
@@ -86,11 +88,11 @@ where
     L: WebsocketClientLogic + 'static,
 {
     pub async fn send(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
-        let (mut id, overflowed) = self.request_counter.overflowing_add(1);
-        if overflowed {
-            id = 0;
-        }
-        // TODO self.request_counter = id;
+        let id = {
+            let mut counter = REQUEST_COUNTER.get_or_init(|| Handle::new(0)).write().await;
+            *counter = counter.wrapping_add(1);
+            *counter
+        };
         self.sender.send(WsRequest { id, request }).await?;
         Ok(())
     }
@@ -110,7 +112,6 @@ where
                 receiver,
                 average_roundtrip: 0.0,
                 average_server_timestamp_delta: 0.0,
-                request_counter: 0,
             }),
         }
     }
@@ -172,12 +173,12 @@ where
     async fn response_received(
         &self,
         response: L::Response,
-        request_id: i64,
+        original_request_id: Option<u64>,
     ) -> anyhow::Result<()> {
         let client = self.clone();
         let data = self.data.read().await;
         data.logic
-            .response_received(response, request_id, client)
+            .response_received(response, original_request_id, client)
             .await
     }
 
