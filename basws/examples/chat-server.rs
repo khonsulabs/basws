@@ -18,12 +18,15 @@ use shared::chat::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
-    Server::initialize(ChatServer::default());
+    let server = Server::new(ChatServer::default());
 
-    let routes = warp::path("ws").and(warp::ws()).map(|ws: warp::ws::Ws| {
-        // And then our closure will be called when it completes...
-        ws.on_upgrade(|ws| async { Server::<ChatServer>::incoming_connection(ws).await })
-    });
+    let routes = warp::path("ws")
+        .and(warp::ws())
+        .map(move |ws: warp::ws::Ws| {
+            // The async closure needs its own reference to the server
+            let server = server.clone();
+            ws.on_upgrade(|ws| async move { server.incoming_connection(ws).await })
+        });
 
     warp::serve(routes).run(([127, 0, 0, 1], SERVER_PORT)).await;
     Ok(())
@@ -61,6 +64,7 @@ impl ServerLogic for ChatServer {
         &self,
         client: &ConnectedClient<Self::Response, Self::Account>,
         request: Self::Request,
+        server: &Server<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         match request {
             ChatRequest::Login { username } => {
@@ -87,8 +91,9 @@ impl ServerLogic for ChatServer {
                     account
                 };
 
-                Server::<Self>::associate_installation_with_account(installation.id, account)
-                    .await?;
+                server
+                    .associate_installation_with_account(installation.id, account)
+                    .await;
 
                 Ok(RequestHandling::Respond(ChatResponse::LoggedIn {
                     username,
@@ -106,7 +111,9 @@ impl ServerLogic for ChatServer {
                     }
                 };
 
-                Server::<Self>::broadcast(ChatResponse::ChatReceived { from, message }).await;
+                server
+                    .broadcast(ChatResponse::ChatReceived { from, message })
+                    .await;
 
                 Ok(RequestHandling::NoResponse)
             }

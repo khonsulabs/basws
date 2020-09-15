@@ -1,4 +1,4 @@
-use crate::{connected_client::ConnectedClient, ErrorHandling, RequestHandling};
+use crate::{connected_client::ConnectedClient, ErrorHandling, RequestHandling, Server};
 use async_handle::Handle;
 use async_trait::async_trait;
 use basws_shared::{protocol::InstallationConfig, Uuid, VersionReq};
@@ -27,6 +27,7 @@ pub trait ServerLogic: Send + Sync {
         &self,
         client: &ConnectedClient<Self::Response, Self::Account>,
         request: Self::Request,
+        server: &Server<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
 
     async fn lookup_account_from_installation_id(

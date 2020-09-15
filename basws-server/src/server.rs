@@ -11,12 +11,8 @@ use basws_shared::{
     Uuid, Version,
 };
 use futures::{SinkExt, StreamExt};
-use once_cell::sync::OnceCell;
-use std::{collections::HashMap, collections::HashSet};
+use std::{collections::HashMap, collections::HashSet, sync::Arc};
 use warp::ws::Message;
-
-// TODO switch this to work like the Client
-static SERVER: OnceCell<Box<dyn ServerPublicApi>> = OnceCell::new();
 
 #[async_trait]
 pub(crate) trait ServerPublicApi: Send + Sync {
@@ -28,9 +24,27 @@ pub type AccountMap<TAccount: Identifiable> = Handle<HashMap<TAccount::Id, Handl
 
 pub struct Server<L>
 where
+    L: ServerLogic + ?Sized,
+{
+    data: Arc<ServerData<L>>,
+}
+
+impl<L> Clone for Server<L>
+where
     L: ServerLogic,
 {
-    logic: L,
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+        }
+    }
+}
+
+struct ServerData<L>
+where
+    L: ServerLogic + ?Sized,
+{
+    logic: Box<L>,
     clients: RwLock<ClientData<L::Response, L::Account>>,
     accounts_by_id: AccountMap<L::Account>,
 }
@@ -71,238 +85,17 @@ impl<L> Server<L>
 where
     L: ServerLogic + 'static,
 {
-    fn new(logic: L) -> Self {
+    pub fn new(logic: L) -> Self {
         Self {
-            logic,
-            clients: Default::default(),
-            accounts_by_id: Default::default(),
+            data: Arc::new(ServerData {
+                logic: Box::new(logic),
+                clients: Default::default(),
+                accounts_by_id: Default::default(),
+            }),
         }
     }
 
-    pub fn initialize(logic: L) {
-        let _ = SERVER.set(Box::new(Self::new(logic)));
-    }
-
-    pub async fn incoming_connection(ws: warp::ws::WebSocket) {
-        let server = SERVER.get().expect("Server never initialized");
-        let server = server.as_any().downcast_ref::<Self>().unwrap();
-        server.handle_connection(ws).await
-    }
-
-    pub async fn broadcast(response: L::Response) {
-        let server = SERVER.get().expect("Server never initialized");
-        let server = server.as_any().downcast_ref::<Self>().unwrap();
-        let data = server.clients.read().await;
-
-        futures::future::join_all(
-            data.clients
-                .keys()
-                .map(|&id| Self::send_to_installation_id(id, response.clone())),
-        )
-        .await;
-    }
-
-    pub async fn send_to_installation_id(installation_id: Uuid, response: L::Response) {
-        let server = SERVER.get().expect("Server never initialized");
-        let server = server.as_any().downcast_ref::<Self>().unwrap();
-        let data = server.clients.read().await;
-        if let Some(client) = data.clients.get(&installation_id) {
-            let _ = client.send(WsBatchResponse::from_response(response)).await;
-        }
-    }
-
-    pub async fn send_to_account_id(account_id: L::AccountId, response: L::Response) {
-        let server = SERVER.get().expect("Server never initialized");
-        let server = server.as_any().downcast_ref::<Self>().unwrap();
-        let data = server.clients.read().await;
-        if let Some(clients) = data.installations_by_account.get(&account_id) {
-            for installation_id in clients {
-                if let Some(client) = data.clients.get(&installation_id) {
-                    let _ = client
-                        .send(WsBatchResponse::from_response(response.clone()))
-                        .await;
-                }
-            }
-        }
-    }
-
-    pub async fn associate_installation_with_account(
-        installation_id: Uuid,
-        account: Handle<L::Account>,
-    ) -> anyhow::Result<()> {
-        let server = SERVER.get().expect("Server never initialized");
-        let server = server.as_any().downcast_ref::<Self>().unwrap();
-
-        server.associate_account(installation_id, account).await;
-
-        Ok(())
-    }
-
-    async fn websocket_error(&self, error: warp::Error) -> ErrorHandling {
-        self.logic.handle_websocket_error(error).await
-    }
-
-    async fn disconnect(&self, client: ConnectedClient<L::Response, L::Account>) {
-        if let Some(installation) = client.installation().await {
-            let mut data = self.clients.write().await;
-
-            data.clients.remove(&installation.id);
-            let account_id = match data.account_by_installation.get(&installation.id) {
-                Some(account_id) => *account_id,
-                None => return,
-            };
-            data.account_by_installation.remove(&installation.id);
-
-            let remove_account =
-                if let Some(installations) = data.installations_by_account.get_mut(&account_id) {
-                    installations.remove(&installation.id);
-                    installations.is_empty()
-                } else {
-                    false
-                };
-
-            if remove_account {
-                data.installations_by_account.remove(&account_id);
-
-                let mut accounts_by_id = self.accounts_by_id.write().await;
-                accounts_by_id.remove(&account_id);
-            }
-        }
-    }
-
-    async fn handle_request(
-        &self,
-        client_handle: &ConnectedClient<L::Response, L::Account>,
-        ws_request: WsRequest<L::Request>,
-    ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
-        match ws_request.request {
-            ServerRequest::Greetings {
-                protocol_version,
-                server_version,
-                installation_id,
-            } => {
-                if self
-                    .check_protocol_versions(&protocol_version, &server_version)
-                    .await
-                    .is_err()
-                {
-                    return Ok(ServerRequestHandling::Error(
-                        ServerError::IncompatibleVersion,
-                    ));
-                }
-
-                let config = self
-                    .logic
-                    .lookup_or_create_installation(installation_id)
-                    .await?;
-
-                if let Some(installation_id) = installation_id {
-                    if installation_id == config.id {
-                        self.connect(config, client_handle).await;
-
-                        let nonce = {
-                            let nonce = challenge::nonce();
-                            client_handle.set_nonce(nonce).await;
-                            nonce
-                        };
-                        return Ok(ServerRequestHandling::Respond(ServerResponse::Challenge {
-                            nonce,
-                        }));
-                    }
-                }
-
-                self.connect(config, client_handle).await;
-
-                let new_installation_response = self
-                    .logic
-                    .new_installation_connected(config.id)
-                    .await?
-                    .into_server_handling();
-
-                let response =
-                    ServerRequestHandling::Respond(ServerResponse::NewInstallation(config))
-                        + new_installation_response;
-
-                Ok(response)
-            }
-            ServerRequest::ChallengeResponse(response) => {
-                let (installation, nonce) = {
-                    let installation = client_handle.installation().await.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Challenge responded on socket that didn't have installation_id setup"
-                        )
-                    })?;
-                    let nonce = client_handle.nonce().await.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Challenge responded on socket that didn't have nonce setup"
-                        )
-                    })?;
-                    (installation, nonce)
-                };
-
-                let logic_response = if challenge::compute_challenge(
-                    &installation.private_key,
-                    &nonce,
-                ) == response
-                {
-                    let profile = self
-                        .lookup_account_from_installation_id(installation.id)
-                        .await?;
-
-                    if let Some(profile) = &profile {
-                        self.associate_account(installation.id, profile.clone())
-                            .await;
-                    }
-
-                    self.logic
-                        .client_reconnected(installation.id, profile)
-                        .await?
-                } else {
-                    self.logic
-                        .new_installation_connected(installation.id)
-                        .await?
-                };
-                Ok(ServerRequestHandling::Respond(ServerResponse::Connected {
-                    installation_id: installation.id,
-                }) + logic_response.into_server_handling())
-            }
-            ServerRequest::Pong {
-                original_timestamp,
-                timestamp,
-            } => {
-                client_handle
-                    .update_network_timing(original_timestamp, timestamp)
-                    .await;
-                Ok(ServerRequestHandling::NoResponse)
-            }
-            ServerRequest::Request(request) => self
-                .logic
-                .handle_request(client_handle, request)
-                .await
-                .map(|result| result.into_server_handling()),
-        }
-    }
-
-    async fn check_protocol_versions(
-        &self,
-        protocol_version: &str,
-        server_version: &str,
-    ) -> anyhow::Result<()> {
-        let protocol_version = Version::parse(protocol_version)?;
-        let server_version = Version::parse(server_version)?;
-        if protocol_version_requirements().matches(&protocol_version)
-            && self
-                .logic
-                .protocol_version_requirements()
-                .matches(&server_version)
-        {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Incompatible versions"))
-        }
-    }
-
-    async fn handle_connection(&self, ws: warp::ws::WebSocket) {
+    pub async fn incoming_connection(&self, ws: warp::ws::WebSocket) {
         let (mut tx, mut rx) = ws.split();
 
         let (sender, transmission_receiver) =
@@ -356,20 +149,43 @@ where
         self.disconnect(client).await;
     }
 
-    async fn connect(
-        &self,
-        installation: InstallationConfig,
-        client: &ConnectedClient<L::Response, L::Account>,
-    ) {
-        let mut data = self.clients.write().await;
-        data.clients.insert(installation.id, client.clone());
-        {
-            client.set_installation(installation).await;
+    pub async fn broadcast(&self, response: L::Response) {
+        let data = self.data.clients.read().await;
+
+        futures::future::join_all(
+            data.clients
+                .keys()
+                .map(|&id| self.send_to_installation_id(id, response.clone())),
+        )
+        .await;
+    }
+
+    pub async fn send_to_installation_id(&self, installation_id: Uuid, response: L::Response) {
+        let data = self.data.clients.read().await;
+        if let Some(client) = data.clients.get(&installation_id) {
+            let _ = client.send(WsBatchResponse::from_response(response)).await;
         }
     }
 
-    async fn associate_account(&self, installation_id: Uuid, account: Handle<L::Account>) {
-        let mut data = self.clients.write().await;
+    pub async fn send_to_account_id(&self, account_id: L::AccountId, response: L::Response) {
+        let data = self.data.clients.read().await;
+        if let Some(clients) = data.installations_by_account.get(&account_id) {
+            for installation_id in clients {
+                if let Some(client) = data.clients.get(&installation_id) {
+                    let _ = client
+                        .send(WsBatchResponse::from_response(response.clone()))
+                        .await;
+                }
+            }
+        }
+    }
+
+    pub async fn associate_installation_with_account(
+        &self,
+        installation_id: Uuid,
+        account: Handle<L::Account>,
+    ) {
+        let mut data = self.data.clients.write().await;
         if let Some(client) = data.clients.get_mut(&installation_id) {
             client.set_account(account.clone()).await;
         }
@@ -388,17 +204,200 @@ where
         installations.insert(installation_id);
     }
 
+    async fn websocket_error(&self, error: warp::Error) -> ErrorHandling {
+        self.data.logic.handle_websocket_error(error).await
+    }
+
+    async fn disconnect(&self, client: ConnectedClient<L::Response, L::Account>) {
+        if let Some(installation) = client.installation().await {
+            let mut data = self.data.clients.write().await;
+
+            data.clients.remove(&installation.id);
+            let account_id = match data.account_by_installation.get(&installation.id) {
+                Some(account_id) => *account_id,
+                None => return,
+            };
+            data.account_by_installation.remove(&installation.id);
+
+            let remove_account =
+                if let Some(installations) = data.installations_by_account.get_mut(&account_id) {
+                    installations.remove(&installation.id);
+                    installations.is_empty()
+                } else {
+                    false
+                };
+
+            if remove_account {
+                data.installations_by_account.remove(&account_id);
+
+                let mut accounts_by_id = self.data.accounts_by_id.write().await;
+                accounts_by_id.remove(&account_id);
+            }
+        }
+    }
+
+    async fn handle_request(
+        &self,
+        client_handle: &ConnectedClient<L::Response, L::Account>,
+        ws_request: WsRequest<L::Request>,
+    ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
+        match ws_request.request {
+            ServerRequest::Greetings {
+                protocol_version,
+                server_version,
+                installation_id,
+            } => {
+                if self
+                    .check_protocol_versions(&protocol_version, &server_version)
+                    .await
+                    .is_err()
+                {
+                    return Ok(ServerRequestHandling::Error(
+                        ServerError::IncompatibleVersion,
+                    ));
+                }
+
+                let config = self
+                    .data
+                    .logic
+                    .lookup_or_create_installation(installation_id)
+                    .await?;
+
+                if let Some(installation_id) = installation_id {
+                    if installation_id == config.id {
+                        self.connect(config, client_handle).await;
+
+                        let nonce = {
+                            let nonce = challenge::nonce();
+                            client_handle.set_nonce(nonce).await;
+                            nonce
+                        };
+                        return Ok(ServerRequestHandling::Respond(ServerResponse::Challenge {
+                            nonce,
+                        }));
+                    }
+                }
+
+                self.connect(config, client_handle).await;
+
+                let new_installation_response = self
+                    .data
+                    .logic
+                    .new_installation_connected(config.id)
+                    .await?
+                    .into_server_handling();
+
+                let response =
+                    ServerRequestHandling::Respond(ServerResponse::NewInstallation(config))
+                        + new_installation_response;
+
+                Ok(response)
+            }
+            ServerRequest::ChallengeResponse(response) => {
+                let (installation, nonce) = {
+                    let installation = client_handle.installation().await.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Challenge responded on socket that didn't have installation_id setup"
+                        )
+                    })?;
+                    let nonce = client_handle.nonce().await.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Challenge responded on socket that didn't have nonce setup"
+                        )
+                    })?;
+                    (installation, nonce)
+                };
+
+                let logic_response = if challenge::compute_challenge(
+                    &installation.private_key,
+                    &nonce,
+                ) == response
+                {
+                    let profile = self
+                        .lookup_account_from_installation_id(installation.id)
+                        .await?;
+
+                    if let Some(profile) = &profile {
+                        self.associate_installation_with_account(installation.id, profile.clone())
+                            .await;
+                    }
+
+                    self.data
+                        .logic
+                        .client_reconnected(installation.id, profile)
+                        .await?
+                } else {
+                    self.data
+                        .logic
+                        .new_installation_connected(installation.id)
+                        .await?
+                };
+                Ok(ServerRequestHandling::Respond(ServerResponse::Connected {
+                    installation_id: installation.id,
+                }) + logic_response.into_server_handling())
+            }
+            ServerRequest::Pong {
+                original_timestamp,
+                timestamp,
+            } => {
+                client_handle
+                    .update_network_timing(original_timestamp, timestamp)
+                    .await;
+                Ok(ServerRequestHandling::NoResponse)
+            }
+            ServerRequest::Request(request) => self
+                .data
+                .logic
+                .handle_request(client_handle, request, self)
+                .await
+                .map(|result| result.into_server_handling()),
+        }
+    }
+
+    async fn check_protocol_versions(
+        &self,
+        protocol_version: &str,
+        server_version: &str,
+    ) -> anyhow::Result<()> {
+        let protocol_version = Version::parse(protocol_version)?;
+        let server_version = Version::parse(server_version)?;
+        if protocol_version_requirements().matches(&protocol_version)
+            && self
+                .data
+                .logic
+                .protocol_version_requirements()
+                .matches(&server_version)
+        {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Incompatible versions"))
+        }
+    }
+
+    async fn connect(
+        &self,
+        installation: InstallationConfig,
+        client: &ConnectedClient<L::Response, L::Account>,
+    ) {
+        let mut data = self.data.clients.write().await;
+        data.clients.insert(installation.id, client.clone());
+        {
+            client.set_installation(installation).await;
+        }
+    }
+
     async fn lookup_account_from_installation_id(
         &self,
         installation_id: Uuid,
     ) -> anyhow::Result<Option<Handle<L::Account>>> {
         match self
+            .data
             .logic
             .lookup_account_from_installation_id(installation_id)
             .await?
         {
             Some(profile) => {
-                let mut accounts_by_id = self.accounts_by_id.write().await;
+                let mut accounts_by_id = self.data.accounts_by_id.write().await;
                 let id = {
                     let profile = profile.read().await;
                     profile.id()
@@ -524,6 +523,7 @@ mod tests {
             &self,
             _client: &ConnectedClient<Self::Response, Self::Account>,
             _request: Self::Request,
+            _server: &Server<Self>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             unimplemented!()
         }
@@ -593,12 +593,12 @@ mod tests {
             .await;
 
         {
-            let data = server.clients.read().await;
+            let data = server.data.clients.read().await;
             assert_eq!(1, data.clients.len());
             assert_eq!(0, data.account_by_installation.len());
             assert_eq!(0, data.installations_by_account.len());
 
-            let accounts = server.accounts_by_id.read().await;
+            let accounts = server.data.accounts_by_id.read().await;
             assert_eq!(0, accounts.len());
         }
 
@@ -607,12 +607,12 @@ mod tests {
             .await;
 
         {
-            let data = server.clients.read().await;
+            let data = server.data.clients.read().await;
             assert_eq!(2, data.clients.len());
             assert_eq!(0, data.account_by_installation.len());
             assert_eq!(0, data.installations_by_account.len());
 
-            let accounts = server.accounts_by_id.read().await;
+            let accounts = server.data.accounts_by_id.read().await;
             assert_eq!(0, accounts.len());
         }
 
@@ -621,40 +621,40 @@ mod tests {
             .await?
             .unwrap();
         server
-            .associate_account(installation_has_account.id, account)
+            .associate_installation_with_account(installation_has_account.id, account)
             .await;
 
         {
-            let data = server.clients.read().await;
+            let data = server.data.clients.read().await;
             assert_eq!(2, data.clients.len());
             assert_eq!(1, data.account_by_installation.len());
             assert_eq!(1, data.installations_by_account.len());
 
-            let accounts = server.accounts_by_id.read().await;
+            let accounts = server.data.accounts_by_id.read().await;
             assert_eq!(1, accounts.len());
         }
 
         server.disconnect(client_no_account).await;
 
         {
-            let data = server.clients.read().await;
+            let data = server.data.clients.read().await;
             assert_eq!(1, data.clients.len());
             assert_eq!(1, data.account_by_installation.len());
             assert_eq!(1, data.installations_by_account.len());
 
-            let accounts = server.accounts_by_id.read().await;
+            let accounts = server.data.accounts_by_id.read().await;
             assert_eq!(1, accounts.len());
         }
 
         server.disconnect(client_has_account).await;
 
         {
-            let data = server.clients.read().await;
+            let data = server.data.clients.read().await;
             assert_eq!(0, data.clients.len());
             assert_eq!(0, data.account_by_installation.len());
             assert_eq!(0, data.installations_by_account.len());
 
-            let accounts = server.accounts_by_id.read().await;
+            let accounts = server.data.accounts_by_id.read().await;
             assert_eq!(0, accounts.len());
         }
 
