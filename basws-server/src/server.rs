@@ -2,12 +2,13 @@ use crate::{connected_client::ConnectedClient, Identifiable, WebsocketServerLogi
 pub use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
-use basws_shared::Uuid;
 use basws_shared::{
     challenge,
-    protocol::ServerError,
-    protocol::ServerRequest,
-    protocol::{InstallationConfig, ServerResponse, WsBatchResponse, WsRequest},
+    protocol::{
+        protocol_version_requirements, InstallationConfig, ServerError, ServerRequest,
+        ServerResponse, WsBatchResponse, WsRequest,
+    },
+    Uuid, Version,
 };
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
@@ -181,10 +182,15 @@ where
     ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
         match ws_request.request {
             ServerRequest::Greetings {
-                version,
+                protocol_version,
+                server_version,
                 installation_id,
             } => {
-                if let ErrorHandling::Disconnect = self.logic.check_protocol_version(&version) {
+                if self
+                    .check_protocol_versions(&protocol_version, &server_version)
+                    .await
+                    .is_err()
+                {
                     return Ok(ServerRequestHandling::Error(
                         ServerError::IncompatibleVersion,
                     ));
@@ -280,6 +286,25 @@ where
                 .handle_request(client_handle, request)
                 .await
                 .map(|result| result.into_server_handling()),
+        }
+    }
+
+    async fn check_protocol_versions(
+        &self,
+        protocol_version: &str,
+        server_version: &str,
+    ) -> anyhow::Result<()> {
+        let protocol_version = Version::parse(protocol_version)?;
+        let server_version = Version::parse(server_version)?;
+        if protocol_version_requirements().matches(&protocol_version)
+            && self
+                .logic
+                .protocol_version_requirements()
+                .matches(&server_version)
+        {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Incompatible versions"))
         }
     }
 
@@ -475,13 +500,13 @@ mod tests {
     use super::*;
     use crate::logic::WebsocketServerLogic;
     use async_trait::async_trait;
+    use basws_shared::VersionReq;
     use maplit::hashmap;
     use serde_derive::{Deserialize, Serialize};
 
     struct TestServer {
         logged_in_installations: HashMap<Uuid, Option<i64>>,
         accounts: HashMap<i64, TestAccount>,
-        protocol_version: String,
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
@@ -525,12 +550,8 @@ mod tests {
                 .map(Handle::new))
         }
 
-        fn check_protocol_version(&self, version: &str) -> ErrorHandling {
-            if self.protocol_version == version {
-                ErrorHandling::StayConnected
-            } else {
-                ErrorHandling::Disconnect
-            }
+        fn protocol_version_requirements(&self) -> VersionReq {
+            VersionReq::parse(">=0.1").unwrap()
         }
 
         async fn lookup_or_create_installation(
@@ -578,7 +599,6 @@ mod tests {
             accounts: hashmap! {
                 1 => TestAccount{id: 1},
             },
-            protocol_version: "1".to_string(),
         });
 
         server

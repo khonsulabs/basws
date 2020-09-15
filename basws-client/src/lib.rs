@@ -4,10 +4,11 @@ pub use async_trait::async_trait;
 use basws_shared::{
     challenge,
     protocol::{
-        InstallationConfig, ServerError, ServerRequest, ServerResponse, WsBatchResponse, WsRequest,
+        protocol_version, InstallationConfig, ServerError, ServerRequest, ServerResponse,
+        WsBatchResponse, WsRequest,
     },
     timing::current_timestamp,
-    Uuid,
+    Uuid, Version,
 };
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
@@ -33,7 +34,7 @@ pub trait WebsocketClientLogic: Send + Sync {
     type Response: Serialize + DeserializeOwned + Sync + Send + Clone + Debug;
 
     fn server_url(&self) -> Url;
-    fn protocol_version(&self) -> String;
+    fn protocol_version(&self) -> Version;
 
     async fn state_changed(&self, state: &LoginState, client: Client<Self>) -> anyhow::Result<()>;
     async fn stored_installation_config(&self) -> Option<InstallationConfig>;
@@ -155,7 +156,7 @@ where
         data.logic.server_url()
     }
 
-    async fn protocol_version(&self) -> String {
+    async fn protocol_version(&self) -> Version {
         let data = self.data.read().await;
         data.logic.protocol_version()
     }
@@ -307,7 +308,8 @@ where
             .await?;
 
         self.request(ServerRequest::Greetings {
-            version: self.protocol_version().await,
+            protocol_version: protocol_version().to_string(),
+            server_version: self.protocol_version().await.to_string(),
             installation_id,
         })
         .await?;

@@ -1,7 +1,7 @@
 use crate::{ConnectedClientHandle, ErrorHandling, RequestHandling};
 use async_handle::Handle;
 use async_trait::async_trait;
-use basws_shared::{protocol::InstallationConfig, Uuid};
+use basws_shared::{protocol::InstallationConfig, Uuid, VersionReq};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, hash::Hash};
 
@@ -34,7 +34,7 @@ pub trait WebsocketServerLogic: Send + Sync {
         installation_id: Uuid,
     ) -> anyhow::Result<Option<Handle<Self::Account>>>;
 
-    fn check_protocol_version(&self, version: &str) -> ErrorHandling;
+    fn protocol_version_requirements(&self) -> VersionReq;
 
     async fn lookup_or_create_installation(
         &self,

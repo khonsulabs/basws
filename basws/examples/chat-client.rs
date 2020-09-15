@@ -3,12 +3,15 @@ extern crate log;
 
 use basws::{
     client::{async_trait, Client, LoginState, Url, WebsocketClientLogic},
-    shared::protocol::{InstallationConfig, ServerError},
+    shared::{
+        protocol::{InstallationConfig, ServerError},
+        Version,
+    },
 };
-mod shared;
+pub mod shared;
 use basws_shared::protocol::ServerRequest;
 use rand::{seq::SliceRandom, thread_rng, Rng};
-use shared::chat::{ChatRequest, ChatResponse, PROTOCOL_VERSION, SERVER_PORT};
+use shared::chat::{protocol_version, ChatRequest, ChatResponse, SERVER_PORT};
 use std::{fs, path::PathBuf};
 
 #[tokio::main]
@@ -65,8 +68,8 @@ impl WebsocketClientLogic for ChatClient {
         Url::parse(&format!("ws://localhost:{}/ws", SERVER_PORT)).unwrap()
     }
 
-    fn protocol_version(&self) -> String {
-        PROTOCOL_VERSION.to_owned()
+    fn protocol_version(&self) -> Version {
+        protocol_version()
     }
 
     async fn state_changed(&self, state: &LoginState, _client: Client<Self>) -> anyhow::Result<()> {

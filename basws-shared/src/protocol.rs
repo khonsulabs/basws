@@ -1,6 +1,15 @@
 use crate::challenge;
+use semver::{Version, VersionReq};
 use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub fn protocol_version() -> Version {
+    Version::parse("0.1.0-dev-1").unwrap()
+}
+
+pub fn protocol_version_requirements() -> VersionReq {
+    VersionReq::parse("=0.1.0-dev-1").unwrap()
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WsRequest<T> {
@@ -38,7 +47,8 @@ impl<T> WsBatchResponse<T> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ServerRequest<T> {
     Greetings {
-        version: String,
+        protocol_version: String,
+        server_version: String,
         installation_id: Option<Uuid>,
     },
     ChallengeResponse([u8; 32]),

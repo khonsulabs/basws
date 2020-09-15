@@ -1,4 +1,5 @@
 pub mod challenge;
 pub mod protocol;
 pub mod timing;
+pub use semver::{Version, VersionReq};
 pub use uuid::Uuid;

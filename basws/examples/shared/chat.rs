@@ -1,8 +1,15 @@
-use basws::shared::Uuid;
+use basws::shared::{Uuid, Version, VersionReq};
 use serde_derive::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
-pub const PROTOCOL_VERSION: &str = "0.0.1";
+pub fn protocol_version() -> Version {
+    Version::parse("0.1.1").unwrap()
+}
+
+pub fn protocol_version_requirements() -> VersionReq {
+    VersionReq::parse("=0.1").unwrap()
+}
+
 pub const SERVER_PORT: u16 = 12345;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

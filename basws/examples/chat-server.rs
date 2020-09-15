@@ -1,16 +1,18 @@
 use basws::{
     server::{
-        async_trait, ConnectedClientHandle, ErrorHandling, Handle, Identifiable, RequestHandling,
-        WebsocketServer, WebsocketServerLogic,
+        async_trait, ConnectedClientHandle, Handle, Identifiable, RequestHandling, WebsocketServer,
+        WebsocketServerLogic,
     },
-    shared::{protocol::InstallationConfig, Uuid},
+    shared::{protocol::InstallationConfig, Uuid, VersionReq},
 };
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use warp::Filter;
 
-mod shared;
-use shared::chat::{ChatRequest, ChatResponse, ChatSender, PROTOCOL_VERSION, SERVER_PORT};
+pub mod shared;
+use shared::chat::{
+    protocol_version_requirements, ChatRequest, ChatResponse, ChatSender, SERVER_PORT,
+};
 
 #[derive(Default)]
 struct ChatServer {
@@ -123,12 +125,8 @@ impl WebsocketServerLogic for ChatServer {
         Ok(account)
     }
 
-    fn check_protocol_version(&self, version: &str) -> ErrorHandling {
-        if PROTOCOL_VERSION == version {
-            ErrorHandling::StayConnected
-        } else {
-            ErrorHandling::Disconnect
-        }
+    fn protocol_version_requirements(&self) -> VersionReq {
+        protocol_version_requirements()
     }
 
     async fn lookup_or_create_installation(
