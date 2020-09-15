@@ -20,7 +20,7 @@ futures = "0.3"
 async-rwlock = "1"
 async-handle = "0.1"
 async-channel = "1"
-basws-shared = { path = "../basws-shared" }
+basws-shared = { path = "../basws-shared", version = "0.1.0-dev-1" }
 anyhow = "1"
 serde = "1"
 serde_derive = "1"
