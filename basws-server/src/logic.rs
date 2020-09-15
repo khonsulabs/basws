@@ -1,14 +1,13 @@
 use crate::{ConnectedClientHandle, ErrorHandling, RequestHandling};
 use async_handle::Handle;
 use async_trait::async_trait;
+use basws_shared::{protocol::InstallationConfig, Uuid};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, hash::Hash};
-use uuid::Uuid;
 
 pub trait Identifiable {
     type Id: Copy + Hash + Eq + Send + Sync;
     fn id(&self) -> Self::Id;
-    fn private_key(&self) -> Vec<u8>;
 }
 
 #[async_trait]
@@ -36,12 +35,15 @@ pub trait WebsocketServerLogic: Send + Sync {
 
     fn check_protocol_version(&self, version: &str) -> ErrorHandling;
 
-    async fn lookup_or_create_installation(&self, installation_id: Uuid) -> anyhow::Result<()>;
+    async fn lookup_or_create_installation(
+        &self,
+        installation_id: Option<Uuid>,
+    ) -> anyhow::Result<InstallationConfig>;
 
     async fn client_reconnected(
         &self,
         installation_id: Uuid,
-        account: Handle<Self::Account>,
+        account: Option<Handle<Self::Account>>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
 
     async fn handle_websocket_error(&self, _err: warp::Error) -> ErrorHandling {

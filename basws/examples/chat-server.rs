@@ -1,14 +1,12 @@
-use async_trait::async_trait;
 use basws::{
     server::{
-        ConnectedClientHandle, ErrorHandling, Handle, Identifiable, RequestHandling,
+        async_trait, ConnectedClientHandle, ErrorHandling, Handle, Identifiable, RequestHandling,
         WebsocketServer, WebsocketServerLogic,
     },
-    shared::challenge,
+    shared::{protocol::InstallationConfig, Uuid},
 };
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
 use warp::Filter;
 
 mod shared;
@@ -18,6 +16,7 @@ use shared::chat::{ChatRequest, ChatResponse, ChatSender, PROTOCOL_VERSION, SERV
 struct ChatServer {
     accounts: Handle<HashMap<i64, Handle<Account>>>,
     screennames: Handle<HashMap<String, i64>>,
+    installations: Handle<HashMap<Uuid, InstallationConfig>>,
     installation_accounts: Handle<HashMap<Uuid, i64>>,
 }
 
@@ -25,16 +24,12 @@ struct ChatServer {
 struct Account {
     id: i64,
     username: String,
-    private_key: Vec<u8>,
 }
 
 impl Identifiable for Account {
     type Id = i64;
     fn id(&self) -> Self::Id {
         self.id
-    }
-    fn private_key(&self) -> Vec<u8> {
-        self.private_key.clone()
     }
 }
 
@@ -67,7 +62,6 @@ impl WebsocketServerLogic for ChatServer {
                     let account = Account {
                         id,
                         username: username.clone(),
-                        private_key: challenge::nonce(),
                     };
                     let account = Handle::new(account);
                     accounts.insert(id, account.clone());
@@ -76,7 +70,7 @@ impl WebsocketServerLogic for ChatServer {
                 };
 
                 WebsocketServer::<Self>::associate_installation_with_account(
-                    client.installation_id.unwrap(),
+                    client.installation.unwrap().id,
                     account,
                 )
                 .await?;
@@ -91,8 +85,8 @@ impl WebsocketServerLogic for ChatServer {
                     if let Some(account) = &client.account {
                         let account = account.read().await;
                         ChatSender::User(account.username.clone())
-                    } else if let Some(installation_id) = client.installation_id {
-                        ChatSender::Anonymous(installation_id)
+                    } else if let Some(installation) = client.installation {
+                        ChatSender::Anonymous(installation.id)
                     } else {
                         anyhow::bail!("Client did not finish handshake before chatting");
                     }
@@ -110,15 +104,17 @@ impl WebsocketServerLogic for ChatServer {
         &self,
         installation_id: Uuid,
     ) -> anyhow::Result<Option<Handle<Self::Account>>> {
+        println!("Looking up account: {}", installation_id);
         let installation_accounts = self.installation_accounts.read().await;
-        Ok(
-            if let Some(account_id) = installation_accounts.get(&installation_id) {
-                let accounts = self.accounts.read().await;
-                accounts.get(account_id).cloned()
-            } else {
-                None
-            },
-        )
+
+        let account = if let Some(account_id) = installation_accounts.get(&installation_id) {
+            let accounts = self.accounts.read().await;
+            accounts.get(account_id).cloned()
+        } else {
+            None
+        };
+
+        Ok(account)
     }
 
     fn check_protocol_version(&self, version: &str) -> ErrorHandling {
@@ -129,23 +125,43 @@ impl WebsocketServerLogic for ChatServer {
         }
     }
 
-    async fn lookup_or_create_installation(&self, _installation_id: Uuid) -> anyhow::Result<()> {
-        Ok(())
+    async fn lookup_or_create_installation(
+        &self,
+        installation_id: Option<Uuid>,
+    ) -> anyhow::Result<InstallationConfig> {
+        let mut installations = self.installations.write().await;
+        if let Some(installation_id) = installation_id {
+            if let Some(installation) = installations.get(&installation_id) {
+                return Ok(*installation);
+            }
+        }
+
+        let config = InstallationConfig::default();
+        installations.insert(config.id, config);
+        Ok(config)
     }
 
     async fn client_reconnected(
         &self,
         installation_id: Uuid,
-        account: Handle<Self::Account>,
+        account: Option<Handle<Self::Account>>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
-        let account = account.read().await;
-        println!(
-            "Previously authenticated client reconnected: {} ({})",
-            account.username, installation_id
-        );
-        Ok(RequestHandling::Respond(ChatResponse::LoggedIn {
-            username: account.username.clone(),
-        }))
+        if let Some(account) = account {
+            let account = account.read().await;
+            println!(
+                "Previously authenticated client reconnected: {} ({})",
+                account.username, installation_id
+            );
+            Ok(RequestHandling::Respond(ChatResponse::LoggedIn {
+                username: account.username.clone(),
+            }))
+        } else {
+            println!(
+                "Previously connected anonymous client reconnected: {}",
+                installation_id
+            );
+            Ok(RequestHandling::Respond(ChatResponse::Unauthenticated))
+        }
     }
 
     async fn new_installation_connected(

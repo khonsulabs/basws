@@ -1,3 +1,4 @@
+use crate::challenge;
 use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -40,7 +41,7 @@ pub enum ServerRequest<T> {
         version: String,
         installation_id: Option<Uuid>,
     },
-    ChallengeResponse(Vec<u8>),
+    ChallengeResponse([u8; 32]),
     Pong {
         original_timestamp: f64,
         timestamp: f64,
@@ -57,7 +58,7 @@ pub enum ServerResponse<T> {
     },
     NewInstallation(InstallationConfig),
     Challenge {
-        nonce: Vec<u8>,
+        nonce: [u8; 32],
     },
     Response(T),
     Error(ServerError),
@@ -69,8 +70,17 @@ pub enum ServerError {
     Other(String),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct InstallationConfig {
     pub id: Uuid,
-    pub private_key: Vec<u8>,
+    pub private_key: [u8; 32],
+}
+
+impl Default for InstallationConfig {
+    fn default() -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            private_key: challenge::nonce(),
+        }
+    }
 }

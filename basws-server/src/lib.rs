@@ -8,3 +8,5 @@ pub use basws_shared as shared;
 extern crate futures_await_test;
 
 pub use crate::{logic::*, server::*};
+pub use async_handle::Handle;
+pub use async_trait::async_trait;

@@ -17,8 +17,7 @@ basws-client = { path = "../basws-client", optional = true }
 [dev-dependencies]
 serde = "1"
 serde_derive = "1"
-uuid = { version = "0.8", features = ["v4", "serde"] }
-async-trait = "0.1"
+serde_json = "1"
 anyhow = "1"
 warp = "0.2"
 tokio = { version = "0.2", features = ["full"] }
@@ -26,3 +25,7 @@ tokio = { version = "0.2", features = ["full"] }
 [[example]]
 name = "chat-server"
 required-features = ["basws-server"]
+
+[[example]]
+name = "chat-client"
+required-features = ["basws-client"]

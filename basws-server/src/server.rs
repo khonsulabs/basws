@@ -2,16 +2,16 @@ use crate::{connected_client::ConnectedClient, Identifiable, WebsocketServerLogi
 pub use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
+use basws_shared::Uuid;
 use basws_shared::{
     challenge,
     protocol::ServerError,
     protocol::ServerRequest,
-    protocol::{ServerResponse, WsBatchResponse, WsRequest},
+    protocol::{InstallationConfig, ServerResponse, WsBatchResponse, WsRequest},
 };
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
 use std::{collections::HashMap, collections::HashSet};
-use uuid::Uuid;
 use warp::ws::Message;
 
 static SERVER: OnceCell<RwLock<Box<dyn ServerPublicApi>>> = OnceCell::new();
@@ -144,22 +144,22 @@ where
     }
 
     async fn disconnect(&self, client: ConnectedClientHandle<L::Response, L::Account>) {
-        if let Some(installation_id) = {
+        if let Some(installation) = {
             let client = client.read().await;
-            client.installation_id
+            client.installation
         } {
             let mut data = self.clients.write().await;
 
-            data.clients.remove(&installation_id);
-            let account_id = match data.account_by_installation.get(&installation_id) {
+            data.clients.remove(&installation.id);
+            let account_id = match data.account_by_installation.get(&installation.id) {
                 Some(account_id) => *account_id,
                 None => return,
             };
-            data.account_by_installation.remove(&installation_id);
+            data.account_by_installation.remove(&installation.id);
 
             let remove_account =
                 if let Some(installations) = data.installations_by_account.get_mut(&account_id) {
-                    installations.remove(&installation_id);
+                    installations.remove(&installation.id);
                     installations.is_empty()
                 } else {
                     false
@@ -190,75 +190,74 @@ where
                     ));
                 }
 
-                let installation_id = match installation_id {
-                    Some(installation_id) => installation_id,
-                    None => Uuid::new_v4(),
-                };
-
-                self.logic
+                let config = self
+                    .logic
                     .lookup_or_create_installation(installation_id)
                     .await?;
 
-                self.connect(installation_id, client_handle).await;
+                if let Some(installation_id) = installation_id {
+                    if installation_id == config.id {
+                        self.connect(config, client_handle).await;
 
-                if let Some(profile) = self
-                    .lookup_account_from_installation_id(installation_id)
-                    .await?
-                {
-                    let nonce = {
-                        let mut client = client_handle.write().await;
-                        let nonce = challenge::nonce();
-                        client.account = Some(profile.clone());
-                        client.nonce = Some(nonce.clone());
-                        nonce
-                    };
-                    Ok(ServerRequestHandling::Respond(ServerResponse::Challenge {
-                        nonce,
-                    }))
-                } else {
-                    self.logic
-                        .new_installation_connected(installation_id)
-                        .await
-                        .map(|result| result.into_server_handling())
+                        let nonce = {
+                            let mut client = client_handle.write().await;
+                            let nonce = challenge::nonce();
+                            client.nonce = Some(nonce);
+                            nonce
+                        };
+                        return Ok(ServerRequestHandling::Respond(ServerResponse::Challenge {
+                            nonce,
+                        }));
+                    }
                 }
+
+                self.connect(config, client_handle).await;
+
+                let new_installation_response = self
+                    .logic
+                    .new_installation_connected(config.id)
+                    .await?
+                    .into_server_handling();
+
+                let response =
+                    ServerRequestHandling::Respond(ServerResponse::NewInstallation(config))
+                        + new_installation_response;
+
+                Ok(response)
             }
             ServerRequest::ChallengeResponse(response) => {
-                let (installation_id, profile, nonce) = {
+                let (installation, nonce) = {
                     let client = client_handle.read().await;
-                    let installation_id = client.installation_id.ok_or_else(|| {
+                    let installation = client.installation.clone().ok_or_else(|| {
                         anyhow::anyhow!(
                             "Challenge responded on socket that didn't have installation_id setup"
                         )
                     })?;
-                    let profile = client.account.clone().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Challenge responded on socket that didn't have account setup"
-                        )
-                    })?;
-                    let nonce = client.nonce.clone().ok_or_else(|| {
+                    let nonce = client.nonce.ok_or_else(|| {
                         anyhow::anyhow!(
                             "Challenge responded on socket that didn't have nonce setup"
                         )
                     })?;
-                    (installation_id, profile, nonce)
+                    (installation, nonce)
                 };
 
-                let private_key = {
-                    let profile = profile.read().await;
-                    profile.private_key()
-                };
-
-                if challenge::compute_challenge(&private_key, &nonce) == response {
-                    self.associate_account(installation_id, profile.clone())
+                if challenge::compute_challenge(&installation.private_key, &nonce) == response {
+                    let profile = self
+                        .lookup_account_from_installation_id(installation.id)
                         .await?;
 
+                    if let Some(profile) = &profile {
+                        self.associate_account(installation.id, profile.clone())
+                            .await?;
+                    }
+
                     self.logic
-                        .client_reconnected(installation_id, profile)
+                        .client_reconnected(installation.id, profile)
                         .await
                         .map(|result| result.into_server_handling())
                 } else {
                     self.logic
-                        .new_installation_connected(installation_id)
+                        .new_installation_connected(installation.id)
                         .await
                         .map(|result| result.into_server_handling())
                 }
@@ -333,14 +332,14 @@ where
 
     async fn connect(
         &self,
-        installation_id: Uuid,
+        installation: InstallationConfig,
         client: &ConnectedClientHandle<L::Response, L::Account>,
     ) {
         let mut data = self.clients.write().await;
-        data.clients.insert(installation_id, client.clone());
+        data.clients.insert(installation.id, client.clone());
         {
             let mut client = client.write().await;
-            client.installation_id = Some(installation_id);
+            client.installation = Some(installation);
         }
     }
 
@@ -429,23 +428,42 @@ impl<T> RequestHandling<T> {
     }
 }
 
-impl<T> ServerRequestHandling<T> {
+impl<T> ServerRequestHandling<T>
+where
+    T: Clone,
+{
     fn into_batch(self, request_id: i64) -> Option<WsBatchResponse<T>> {
-        match self {
-            ServerRequestHandling::NoResponse => None,
-            ServerRequestHandling::Error(error) => Some(WsBatchResponse {
-                request_id,
-                results: vec![ServerResponse::Error(error)],
-            }),
-            ServerRequestHandling::Respond(response) => Some(WsBatchResponse {
-                request_id,
-                results: vec![response],
-            }),
-            ServerRequestHandling::Batch(results) => Some(WsBatchResponse {
+        let results = self.responses();
+        if results.is_empty() {
+            None
+        } else {
+            Some(WsBatchResponse {
                 request_id,
                 results,
-            }),
+            })
         }
+    }
+
+    fn responses(&self) -> Vec<ServerResponse<T>> {
+        match self {
+            ServerRequestHandling::NoResponse => Vec::new(),
+            ServerRequestHandling::Error(error) => vec![ServerResponse::Error(error.clone())],
+            ServerRequestHandling::Respond(response) => vec![response.clone()],
+            ServerRequestHandling::Batch(results) => results.clone(),
+        }
+    }
+}
+
+impl<T> std::ops::Add for ServerRequestHandling<T>
+where
+    T: Clone,
+{
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        let mut responses = self.responses();
+        responses.extend(rhs.responses());
+        ServerRequestHandling::Batch(responses)
     }
 }
 
@@ -458,7 +476,7 @@ mod tests {
     use serde_derive::{Deserialize, Serialize};
 
     struct TestServer {
-        logged_in_installations: HashMap<Uuid, i64>,
+        logged_in_installations: HashMap<Uuid, Option<i64>>,
         accounts: HashMap<i64, TestAccount>,
         protocol_version: String,
     }
@@ -466,17 +484,12 @@ mod tests {
     #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
     struct TestAccount {
         id: i64,
-        private_key: Vec<u8>,
     }
 
     impl Identifiable for TestAccount {
         type Id = i64;
         fn id(&self) -> Self::Id {
             self.id
-        }
-
-        fn private_key(&self) -> Vec<u8> {
-            self.private_key.clone()
         }
     }
 
@@ -503,7 +516,8 @@ mod tests {
             Ok(self
                 .logged_in_installations
                 .get(&installation_id)
-                .map(|account_id| self.accounts.get(account_id).cloned())
+                .map(|account_id| account_id.map(|id| self.accounts.get(&id).cloned()))
+                .flatten()
                 .flatten()
                 .map(Handle::new))
         }
@@ -518,15 +532,15 @@ mod tests {
 
         async fn lookup_or_create_installation(
             &self,
-            _installation_id: Uuid,
-        ) -> anyhow::Result<()> {
+            _installation_id: Option<Uuid>,
+        ) -> anyhow::Result<InstallationConfig> {
             unimplemented!()
         }
 
         async fn client_reconnected(
             &self,
             _installation_id: Uuid,
-            _account: Handle<Self::Account>,
+            _account: Option<Handle<Self::Account>>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             todo!()
         }
@@ -541,25 +555,25 @@ mod tests {
 
     #[async_test]
     async fn simulated_events() -> anyhow::Result<()> {
-        let installation_no_account = Uuid::new_v4();
+        let installation_no_account = InstallationConfig::default();
         let (sender, _) = async_channel::unbounded();
-        let client_no_account = Handle::new(ConnectedClient::new_with_installation_id(
+        let client_no_account = Handle::new(ConnectedClient::new_with_installation(
             installation_no_account,
             sender,
         ));
-        let installation_has_account = Uuid::new_v4();
+        let installation_has_account = InstallationConfig::default();
         let (sender, _) = async_channel::unbounded();
-        let client_has_account = Handle::new(ConnectedClient::new_with_installation_id(
+        let client_has_account = Handle::new(ConnectedClient::new_with_installation(
             installation_has_account,
             sender,
         ));
 
         let server = WebsocketServer::new(TestServer {
             logged_in_installations: hashmap! {
-                installation_has_account => 1,
+                installation_has_account.id => Some(1),
             },
             accounts: hashmap! {
-                1 => TestAccount{id: 1, private_key: vec![]},
+                1 => TestAccount{id: 1},
             },
             protocol_version: "1".to_string(),
         });
@@ -572,7 +586,7 @@ mod tests {
             let data = server.clients.read().await;
             assert_eq!(1, data.clients.len());
             assert!(Handle::ptr_eq(
-                &data.clients[&installation_no_account],
+                &data.clients[&installation_no_account.id],
                 &client_no_account
             ));
             assert_eq!(0, data.account_by_installation.len());
@@ -590,7 +604,7 @@ mod tests {
             let data = server.clients.read().await;
             assert_eq!(2, data.clients.len());
             assert!(Handle::ptr_eq(
-                &data.clients[&installation_has_account],
+                &data.clients[&installation_has_account.id],
                 &client_has_account
             ));
             assert_eq!(0, data.account_by_installation.len());
@@ -601,18 +615,18 @@ mod tests {
         }
 
         let account = server
-            .lookup_account_from_installation_id(installation_has_account)
+            .lookup_account_from_installation_id(installation_has_account.id)
             .await?
             .unwrap();
         server
-            .associate_account(installation_has_account, account)
+            .associate_account(installation_has_account.id, account)
             .await?;
 
         {
             let data = server.clients.read().await;
             assert_eq!(2, data.clients.len());
             assert!(Handle::ptr_eq(
-                &data.clients[&installation_has_account],
+                &data.clients[&installation_has_account.id],
                 &client_has_account
             ));
             assert_eq!(1, data.account_by_installation.len());

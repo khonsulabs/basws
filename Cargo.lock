@@ -86,14 +86,13 @@ name = "basws"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "basws-client",
  "basws-server",
  "basws-shared",
  "serde",
  "serde_derive",
+ "serde_json",
  "tokio",
- "uuid",
  "warp",
 ]
 
@@ -112,7 +111,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "url",
- "uuid",
 ]
 
 [[package]]
@@ -133,7 +131,6 @@ dependencies = [
  "serde_cbor",
  "serde_derive",
  "tokio",
- "uuid",
  "warp",
 ]
 

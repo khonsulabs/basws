@@ -1,5 +1,5 @@
+use basws::shared::Uuid;
 use serde_derive::{Deserialize, Serialize};
-use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: &str = "0.0.1";
 pub const SERVER_PORT: u16 = 12345;

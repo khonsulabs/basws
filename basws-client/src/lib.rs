@@ -1,18 +1,20 @@
 use async_channel::{Receiver, Sender};
-use async_handle::Handle;
-use async_trait::async_trait;
+pub use async_handle::Handle;
+pub use async_trait::async_trait;
 use basws_shared::{
     challenge,
-    protocol::{InstallationConfig, ServerError, ServerRequest, ServerResponse},
+    protocol::{
+        InstallationConfig, ServerError, ServerRequest, ServerResponse, WsBatchResponse, WsRequest,
+    },
     timing::current_timestamp,
+    Uuid,
 };
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
-use url::Url;
-use uuid::Uuid;
+pub use url::Url;
 
 #[derive(Debug, Clone)]
 pub enum LoginState {
@@ -24,7 +26,6 @@ pub enum LoginState {
 
 #[async_trait]
 pub trait WebsocketClientLogic: Send + Sync {
-    type Account: Serialize + DeserializeOwned + Sync + Send + Debug;
     type Request: Serialize + DeserializeOwned + Sync + Send + Clone + Debug;
     type Response: Serialize + DeserializeOwned + Sync + Send + Clone + Debug;
 
@@ -33,7 +34,11 @@ pub trait WebsocketClientLogic: Send + Sync {
 
     async fn state_changed(&self, state: &LoginState) -> anyhow::Result<()>;
     async fn stored_installation_config(&self) -> Option<InstallationConfig>;
-    async fn response_received(&self, response: Self::Response) -> anyhow::Result<()>;
+    async fn response_received(
+        &self,
+        response: Self::Response,
+        request_id: i64,
+    ) -> anyhow::Result<()>;
     async fn handle_error(&self, error: ServerError) -> anyhow::Result<()>;
     async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()>;
 }
@@ -52,10 +57,27 @@ where
 {
     logic: L,
     login_state: LoginState,
-    sender: Sender<ServerRequest<L::Request>>,
-    receiver: Receiver<ServerRequest<L::Request>>,
+    sender: Sender<WsRequest<L::Request>>,
+    receiver: Receiver<WsRequest<L::Request>>,
     average_roundtrip: f64,
     average_server_timestamp_delta: f64,
+    request_counter: i64,
+}
+
+impl<L> ClientData<L>
+where
+    L: WebsocketClientLogic + 'static,
+{
+    pub async fn send(&mut self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
+        println!("Sending request: {:?}", request);
+        let (mut id, overflowed) = self.request_counter.overflowing_add(1);
+        if overflowed {
+            id = 0;
+        }
+        self.request_counter = id;
+        self.sender.send(WsRequest { id, request }).await?;
+        Ok(())
+    }
 }
 
 impl<L> Client<L>
@@ -72,6 +94,7 @@ where
                 receiver,
                 average_roundtrip: 0.0,
                 average_server_timestamp_delta: 0.0,
+                request_counter: 0,
             }),
         }
     }
@@ -91,13 +114,7 @@ where
         network.login_state.clone()
     }
 
-    pub async fn request(&self, request: ServerRequest<L::Request>) {
-        println!("Sending request: {:?}", request);
-        let network = self.data.read().await;
-        let _ = network.sender.send(request).await;
-    }
-
-    async fn receiver(&self) -> Receiver<ServerRequest<L::Request>> {
+    async fn receiver(&self) -> Receiver<WsRequest<L::Request>> {
         let network = self.data.read().await;
         network.receiver.clone()
     }
@@ -127,9 +144,13 @@ where
         data.logic.stored_installation_config().await
     }
 
-    async fn response_received(&self, response: L::Response) -> anyhow::Result<()> {
+    async fn response_received(
+        &self,
+        response: L::Response,
+        request_id: i64,
+    ) -> anyhow::Result<()> {
         let data = self.data.read().await;
-        data.logic.response_received(response).await
+        data.logic.response_received(response, request_id).await
     }
 
     async fn handle_error(&self, error: ServerError) -> anyhow::Result<()> {
@@ -176,45 +197,9 @@ where
         loop {
             match rx.next().await {
                 Some(Ok(Message::Binary(bytes))) => {
-                    match serde_cbor::from_slice::<ServerResponse<L::Response>>(&bytes) {
-                        Ok(response) => match response {
-                            ServerResponse::NewInstallation(config) => {
-                                self.set_login_state(LoginState::Connected {
-                                    installation_id: config.id,
-                                })
-                                .await?;
-                                self.store_installation_config(config).await?;
-                            }
-                            ServerResponse::Challenge { nonce } => {
-                                let config = self.stored_installation_config().await.ok_or_else(||anyhow::anyhow!("Server issued challenge, but client has no stored config"))?;
-
-                                self.send(ServerRequest::ChallengeResponse(
-                                    challenge::compute_challenge(&config.private_key, &nonce),
-                                ))
-                                .await?
-                            }
-                            ServerResponse::Ping {
-                                average_roundtrip,
-                                average_server_timestamp_delta,
-                                timestamp,
-                            } => {
-                                let mut data = self.data.write().await;
-                                data.average_roundtrip = average_roundtrip;
-                                data.average_server_timestamp_delta =
-                                    average_server_timestamp_delta;
-                                data.sender
-                                    .send(ServerRequest::Pong {
-                                        original_timestamp: timestamp,
-                                        timestamp: current_timestamp(),
-                                    })
-                                    .await?;
-                            }
-                            ServerResponse::Error(error) => self.handle_error(error).await?,
-                            ServerResponse::Response(response) => {
-                                self.response_received(response).await?
-                            }
-                        },
-                        Err(_) => println!("Error deserializing message."),
+                    match serde_cbor::from_slice::<WsBatchResponse<L::Response>>(&bytes) {
+                        Ok(response) => self.handle_batch_response(response).await?,
+                        Err(error) => println!("Error deserializing message. {:?}", error),
                     }
                 }
                 Some(Err(err)) => {
@@ -230,9 +215,56 @@ where
         }
     }
 
-    async fn send(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
-        let data = self.data.read().await;
-        data.sender.send(request).await?;
+    async fn handle_batch_response(
+        &self,
+        batch: WsBatchResponse<L::Response>,
+    ) -> anyhow::Result<()> {
+        for response in batch.results {
+            match response {
+                ServerResponse::NewInstallation(config) => {
+                    self.set_login_state(LoginState::Connected {
+                        installation_id: config.id,
+                    })
+                    .await?;
+                    self.store_installation_config(config).await?;
+                }
+                ServerResponse::Challenge { nonce } => {
+                    let config = self.stored_installation_config().await.ok_or_else(|| {
+                        anyhow::anyhow!("Server issued challenge, but client has no stored config")
+                    })?;
+
+                    self.request(ServerRequest::ChallengeResponse(
+                        challenge::compute_challenge(&config.private_key, &nonce),
+                    ))
+                    .await?
+                }
+                ServerResponse::Ping {
+                    average_roundtrip,
+                    average_server_timestamp_delta,
+                    timestamp,
+                } => {
+                    let mut data = self.data.write().await;
+                    data.average_roundtrip = average_roundtrip;
+                    data.average_server_timestamp_delta = average_server_timestamp_delta;
+                    data.send(ServerRequest::Pong {
+                        original_timestamp: timestamp,
+                        timestamp: current_timestamp(),
+                    })
+                    .await?;
+                }
+                ServerResponse::Error(error) => self.handle_error(error).await?,
+                ServerResponse::Response(response) => {
+                    self.response_received(response, batch.request_id).await?
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
+        let mut data = self.data.write().await;
+        data.send(request).await?;
         Ok(())
     }
 
@@ -245,7 +277,7 @@ where
         self.set_login_state(LoginState::Handshaking { config })
             .await?;
 
-        self.send(ServerRequest::Greetings {
+        self.request(ServerRequest::Greetings {
             version: self.protocol_version().await,
             installation_id,
         })
