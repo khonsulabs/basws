@@ -15,6 +15,7 @@ use once_cell::sync::OnceCell;
 use std::{collections::HashMap, collections::HashSet};
 use warp::ws::Message;
 
+// TODO switch this to work like the Client
 static SERVER: OnceCell<Box<dyn ServerPublicApi>> = OnceCell::new();
 
 #[async_trait]

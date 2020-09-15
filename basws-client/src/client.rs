@@ -54,8 +54,8 @@ where
         }
     }
 
-    pub async fn spawn(self) {
-        tokio::spawn(self.run());
+    pub fn spawn(self) -> tokio::task::JoinHandle<anyhow::Result<()>> {
+        tokio::spawn(self.run())
     }
 
     async fn set_login_state(&self, state: LoginState) -> anyhow::Result<()> {

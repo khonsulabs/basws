@@ -1,10 +1,15 @@
 [package]
 name = "basws-client"
-version = "0.1.0"
+version = "0.1.0-dev-1"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
+description = "A simple async WebSocket client/server framework"
+readme = "./README.md"
+license = "MIT"
+keywords = ["websocket", "tokio"]
+categories = ["websocket", "network-programming", "asynchronous"]
+repository = "https://github.com/khonsulabs/basws"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 tokio-tungstenite = "0.11"
 tokio = { version = "0.2" }
