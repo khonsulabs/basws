@@ -1,6 +1,6 @@
 [package]
 name = "basws"
-version = "0.1.0-dev-1"
+version = "0.1.0-dev-2"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
 description = "A simple async WebSocket client/server framework"
@@ -20,9 +20,9 @@ server = ["basws-server"]
 client = ["basws-client"]
 
 [dependencies]
-basws-shared = { path = "../basws-shared", version = "0.1.0-dev-1" }
-basws-server = { path = "../basws-server", version = "0.1.0-dev-1", optional = true }
-basws-client = { path = "../basws-client", version = "0.1.0-dev-1", optional = true }
+basws-shared = { path = "../basws-shared", version = "0.1.0-dev-2" }
+basws-server = { path = "../basws-server", version = "0.1.0-dev-2", optional = true }
+basws-client = { path = "../basws-client", version = "0.1.0-dev-2", optional = true }
 
 [dev-dependencies]
 serde = "1"

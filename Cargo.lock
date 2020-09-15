@@ -103,7 +103,7 @@ checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
 
 [[package]]
 name = "basws"
-version = "0.1.0-dev-1"
+version = "0.1.0-dev-2"
 dependencies = [
  "anyhow",
  "basws-client",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "basws-client"
-version = "0.1.0-dev-1"
+version = "0.1.0-dev-2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "basws-server"
-version = "0.1.0-dev-1"
+version = "0.1.0-dev-2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -150,7 +150,6 @@ dependencies = [
  "futures",
  "futures-await-test",
  "maplit",
- "once_cell",
  "serde",
  "serde_cbor",
  "serde_derive",
@@ -160,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "basws-shared"
-version = "0.1.0-dev-1"
+version = "0.1.0-dev-2"
 dependencies = [
  "chrono",
  "rand 0.7.3",
