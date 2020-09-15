@@ -3,6 +3,7 @@ pub use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
 use basws_shared::{
+    challenge,
     protocol::ServerError,
     protocol::ServerRequest,
     protocol::{ServerResponse, WsBatchResponse, WsRequest},
@@ -177,14 +178,16 @@ where
         &self,
         client_handle: &ConnectedClientHandle<L::Response, L::Account>,
         ws_request: WsRequest<L::Request>,
-    ) -> Result<RequestHandling<L::Response>, anyhow::Error> {
+    ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
         match ws_request.request {
-            ServerRequest::Authenticate {
+            ServerRequest::Greetings {
                 version,
                 installation_id,
             } => {
                 if let ErrorHandling::Disconnect = self.logic.check_protocol_version(&version) {
-                    return Ok(RequestHandling::Error(ServerError::IncompatibleVersion));
+                    return Ok(ServerRequestHandling::Error(
+                        ServerError::IncompatibleVersion,
+                    ));
                 }
 
                 let installation_id = match installation_id {
@@ -202,14 +205,62 @@ where
                     .lookup_account_from_installation_id(installation_id)
                     .await?
                 {
+                    let nonce = {
+                        let mut client = client_handle.write().await;
+                        let nonce = challenge::nonce();
+                        client.account = Some(profile.clone());
+                        client.nonce = Some(nonce.clone());
+                        nonce
+                    };
+                    Ok(ServerRequestHandling::Respond(ServerResponse::Challenge {
+                        nonce,
+                    }))
+                } else {
+                    self.logic
+                        .new_installation_connected(installation_id)
+                        .await
+                        .map(|result| result.into_server_handling())
+                }
+            }
+            ServerRequest::ChallengeResponse(response) => {
+                let (installation_id, profile, nonce) = {
+                    let client = client_handle.read().await;
+                    let installation_id = client.installation_id.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Challenge responded on socket that didn't have installation_id setup"
+                        )
+                    })?;
+                    let profile = client.account.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Challenge responded on socket that didn't have account setup"
+                        )
+                    })?;
+                    let nonce = client.nonce.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Challenge responded on socket that didn't have nonce setup"
+                        )
+                    })?;
+                    (installation_id, profile, nonce)
+                };
+
+                let private_key = {
+                    let profile = profile.read().await;
+                    profile.private_key()
+                };
+
+                if challenge::compute_challenge(&private_key, &nonce) == response {
                     self.associate_account(installation_id, profile.clone())
                         .await?;
 
                     self.logic
                         .client_reconnected(installation_id, profile)
                         .await
+                        .map(|result| result.into_server_handling())
                 } else {
-                    self.logic.new_installation_connected(installation_id).await
+                    self.logic
+                        .new_installation_connected(installation_id)
+                        .await
+                        .map(|result| result.into_server_handling())
                 }
             }
             ServerRequest::Pong {
@@ -218,11 +269,13 @@ where
             } => {
                 let mut client = client_handle.write().await;
                 client.network_timing.update(original_timestamp, timestamp);
-                Ok(RequestHandling::NoResponse)
+                Ok(ServerRequestHandling::NoResponse)
             }
-            ServerRequest::Request(request) => {
-                self.logic.handle_request(client_handle, request).await
-            }
+            ServerRequest::Request(request) => self
+                .logic
+                .handle_request(client_handle, request)
+                .await
+                .map(|result| result.into_server_handling()),
         }
     }
 
@@ -353,25 +406,45 @@ pub enum RequestHandling<R> {
     Batch(Vec<R>),
 }
 
+pub enum ServerRequestHandling<R> {
+    NoResponse,
+    Error(ServerError),
+    Respond(ServerResponse<R>),
+    Batch(Vec<ServerResponse<R>>),
+}
+
 impl<T> RequestHandling<T> {
+    fn into_server_handling(self) -> ServerRequestHandling<T> {
+        match self {
+            RequestHandling::NoResponse => ServerRequestHandling::NoResponse,
+            RequestHandling::Error(error) => ServerRequestHandling::Error(error),
+            RequestHandling::Respond(response) => {
+                ServerRequestHandling::Respond(ServerResponse::Response(response))
+            }
+            RequestHandling::Batch(results) => {
+                let results = results.into_iter().map(ServerResponse::Response).collect();
+                ServerRequestHandling::Batch(results)
+            }
+        }
+    }
+}
+
+impl<T> ServerRequestHandling<T> {
     fn into_batch(self, request_id: i64) -> Option<WsBatchResponse<T>> {
         match self {
-            RequestHandling::NoResponse => None,
-            RequestHandling::Error(error) => Some(WsBatchResponse {
+            ServerRequestHandling::NoResponse => None,
+            ServerRequestHandling::Error(error) => Some(WsBatchResponse {
                 request_id,
                 results: vec![ServerResponse::Error(error)],
             }),
-            RequestHandling::Respond(response) => Some(WsBatchResponse {
+            ServerRequestHandling::Respond(response) => Some(WsBatchResponse {
                 request_id,
-                results: vec![ServerResponse::Response(response)],
+                results: vec![response],
             }),
-            RequestHandling::Batch(results) => {
-                let results = results.into_iter().map(ServerResponse::Response).collect();
-                Some(WsBatchResponse {
-                    request_id,
-                    results,
-                })
-            }
+            ServerRequestHandling::Batch(results) => Some(WsBatchResponse {
+                request_id,
+                results,
+            }),
         }
     }
 }
@@ -391,12 +464,19 @@ mod tests {
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-    struct TestAccount(i64);
+    struct TestAccount {
+        id: i64,
+        private_key: Vec<u8>,
+    }
 
     impl Identifiable for TestAccount {
         type Id = i64;
         fn id(&self) -> Self::Id {
-            self.0
+            self.id
+        }
+
+        fn private_key(&self) -> Vec<u8> {
+            self.private_key.clone()
         }
     }
 
@@ -479,7 +559,7 @@ mod tests {
                 installation_has_account => 1,
             },
             accounts: hashmap! {
-                1 => TestAccount(1),
+                1 => TestAccount{id: 1, private_key: vec![]},
             },
             protocol_version: "1".to_string(),
         });

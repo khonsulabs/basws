@@ -2,8 +2,8 @@ use async_channel::{Receiver, Sender};
 use async_handle::Handle;
 use async_trait::async_trait;
 use basws_shared::{
-    protocol::ServerError,
-    protocol::{ServerRequest, ServerResponse},
+    challenge,
+    protocol::{InstallationConfig, ServerError, ServerRequest, ServerResponse},
     timing::current_timestamp,
 };
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
@@ -17,7 +17,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub enum LoginState {
     Disconnected,
-    Handshaking,
+    Handshaking { config: Option<InstallationConfig> },
     Connected { installation_id: Uuid },
     Error { message: Option<String> },
 }
@@ -32,9 +32,10 @@ pub trait WebsocketClientLogic: Send + Sync {
     fn protocol_version(&self) -> String;
 
     async fn state_changed(&self, state: &LoginState) -> anyhow::Result<()>;
-    async fn stored_installation_id(&self) -> Option<Uuid>;
+    async fn stored_installation_config(&self) -> Option<InstallationConfig>;
     async fn response_received(&self, response: Self::Response) -> anyhow::Result<()>;
     async fn handle_error(&self, error: ServerError) -> anyhow::Result<()>;
+    async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()>;
 }
 
 #[derive(Clone)]
@@ -111,6 +112,36 @@ where
         network.average_server_timestamp_delta
     }
 
+    async fn server_url(&self) -> Url {
+        let data = self.data.read().await;
+        data.logic.server_url()
+    }
+
+    async fn protocol_version(&self) -> String {
+        let data = self.data.read().await;
+        data.logic.protocol_version()
+    }
+
+    async fn stored_installation_config(&self) -> Option<InstallationConfig> {
+        let data = self.data.read().await;
+        data.logic.stored_installation_config().await
+    }
+
+    async fn response_received(&self, response: L::Response) -> anyhow::Result<()> {
+        let data = self.data.read().await;
+        data.logic.response_received(response).await
+    }
+
+    async fn handle_error(&self, error: ServerError) -> anyhow::Result<()> {
+        let data = self.data.read().await;
+        data.logic.handle_error(error).await
+    }
+
+    async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()> {
+        let data = self.data.read().await;
+        data.logic.store_installation_config(config).await
+    }
+
     pub async fn run(self) -> anyhow::Result<()> {
         loop {
             // let socket = match Client::new(server_url).connect().await {
@@ -122,10 +153,7 @@ where
             //         continue;
             //     }
             // };
-            let url = {
-                let data = self.data.read().await;
-                data.logic.server_url()
-            };
+            let url = self.server_url().await;
 
             match connect_async(url).await {
                 Ok((ws, _)) => {
@@ -150,13 +178,20 @@ where
                 Some(Ok(Message::Binary(bytes))) => {
                     match serde_cbor::from_slice::<ServerResponse<L::Response>>(&bytes) {
                         Ok(response) => match response {
-                            ServerResponse::Error(error) => {
-                                let data = self.data.read().await;
-                                data.logic.handle_error(error).await?
+                            ServerResponse::NewInstallation(config) => {
+                                self.set_login_state(LoginState::Connected {
+                                    installation_id: config.id,
+                                })
+                                .await?;
+                                self.store_installation_config(config).await?;
                             }
-                            ServerResponse::Response(response) => {
-                                let data = self.data.read().await;
-                                data.logic.response_received(response).await?
+                            ServerResponse::Challenge { nonce } => {
+                                let config = self.stored_installation_config().await.ok_or_else(||anyhow::anyhow!("Server issued challenge, but client has no stored config"))?;
+
+                                self.send(ServerRequest::ChallengeResponse(
+                                    challenge::compute_challenge(&config.private_key, &nonce),
+                                ))
+                                .await?
                             }
                             ServerResponse::Ping {
                                 average_roundtrip,
@@ -173,6 +208,10 @@ where
                                         timestamp: current_timestamp(),
                                     })
                                     .await?;
+                            }
+                            ServerResponse::Error(error) => self.handle_error(error).await?,
+                            ServerResponse::Response(response) => {
+                                self.response_received(response).await?
                             }
                         },
                         Err(_) => println!("Error deserializing message."),
@@ -191,20 +230,27 @@ where
         }
     }
 
+    async fn send(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
+        let data = self.data.read().await;
+        data.sender.send(request).await?;
+        Ok(())
+    }
+
     async fn send_loop(
         &self,
         mut tx: SplitSink<WebSocketStream<TcpStream>, Message>,
     ) -> anyhow::Result<()> {
-        self.set_login_state(LoginState::Handshaking).await?;
-        {
-            let data = self.data.read().await;
-            data.sender
-                .send(ServerRequest::Authenticate {
-                    version: data.logic.protocol_version(),
-                    installation_id: data.logic.stored_installation_id().await,
-                })
-                .await?;
-        }
+        let config = self.stored_installation_config().await;
+        let installation_id = config.as_ref().map(|config| config.id);
+        self.set_login_state(LoginState::Handshaking { config })
+            .await?;
+
+        self.send(ServerRequest::Greetings {
+            version: self.protocol_version().await,
+            installation_id,
+        })
+        .await?;
+
         let receiver = self.receiver().await;
         loop {
             let request = receiver.recv().await?;

@@ -1,21 +1,6 @@
 use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug)]
-pub enum Message<T> {
-    Initialize,
-    Reset,
-    Message(WsBatchResponse<T>),
-    Connected,
-}
-
-pub trait ConnectedMessage
-where
-    Self: Sized,
-{
-    fn connected() -> Self;
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WsRequest<T> {
     pub id: i64,
@@ -51,10 +36,11 @@ impl<T> WsBatchResponse<T> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ServerRequest<T> {
-    Authenticate {
+    Greetings {
         version: String,
         installation_id: Option<Uuid>,
     },
+    ChallengeResponse(Vec<u8>),
     Pong {
         original_timestamp: f64,
         timestamp: f64,
@@ -69,6 +55,10 @@ pub enum ServerResponse<T> {
         average_roundtrip: f64,
         average_server_timestamp_delta: f64,
     },
+    NewInstallation(InstallationConfig),
+    Challenge {
+        nonce: Vec<u8>,
+    },
     Response(T),
     Error(ServerError),
 }
@@ -77,4 +67,10 @@ pub enum ServerResponse<T> {
 pub enum ServerError {
     IncompatibleVersion,
     Other(String),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InstallationConfig {
+    pub id: Uuid,
+    pub private_key: Vec<u8>,
 }

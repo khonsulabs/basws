@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 pub struct ConnectedClient<Response, Account> {
     pub installation_id: Option<Uuid>,
+    pub(crate) nonce: Option<Vec<u8>>,
     sender: Sender<WsBatchResponse<Response>>,
     pub account: Option<Handle<Account>>,
     pub network_timing: NetworkTiming,
@@ -17,6 +18,7 @@ where
     pub fn new(sender: Sender<WsBatchResponse<Response>>) -> Self {
         Self {
             sender,
+            nonce: None,
             account: None,
             installation_id: None,
             network_timing: Default::default(),
@@ -29,6 +31,7 @@ where
     ) -> Self {
         Self {
             sender,
+            nonce: None,
             account: None,
             installation_id: Some(installation_id),
             network_timing: Default::default(),

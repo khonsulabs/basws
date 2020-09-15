@@ -8,6 +8,7 @@ use uuid::Uuid;
 pub trait Identifiable {
     type Id: Copy + Hash + Eq + Send + Sync;
     fn id(&self) -> Self::Id;
+    fn private_key(&self) -> Vec<u8>;
 }
 
 #[async_trait]

@@ -1,7 +1,10 @@
 use async_trait::async_trait;
-use basws::server::{
-    ConnectedClientHandle, ErrorHandling, Handle, Identifiable, RequestHandling, WebsocketServer,
-    WebsocketServerLogic,
+use basws::{
+    server::{
+        ConnectedClientHandle, ErrorHandling, Handle, Identifiable, RequestHandling,
+        WebsocketServer, WebsocketServerLogic,
+    },
+    shared::challenge,
 };
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,12 +25,16 @@ struct ChatServer {
 struct Account {
     id: i64,
     username: String,
+    private_key: Vec<u8>,
 }
 
 impl Identifiable for Account {
     type Id = i64;
     fn id(&self) -> Self::Id {
         self.id
+    }
+    fn private_key(&self) -> Vec<u8> {
+        self.private_key.clone()
     }
 }
 
@@ -60,6 +67,7 @@ impl WebsocketServerLogic for ChatServer {
                     let account = Account {
                         id,
                         username: username.clone(),
+                        private_key: challenge::nonce(),
                     };
                     let account = Handle::new(account);
                     accounts.insert(id, account.clone());
