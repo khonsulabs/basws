@@ -22,7 +22,6 @@ pub(crate) trait ServerPublicApi: Send + Sync {
     fn as_any(&self) -> &'_ dyn std::any::Any;
 }
 
-pub type ConnectedClientHandle<Response, Account> = Handle<ConnectedClient<Response, Account>>;
 #[allow(type_alias_bounds)] // This warning is a false positive. Without the bounds, we can't use ::Id
 pub type AccountMap<TAccount: Identifiable> = Handle<HashMap<TAccount::Id, Handle<TAccount>>>;
 
@@ -39,7 +38,7 @@ struct ClientData<Response, TAccount>
 where
     TAccount: Identifiable,
 {
-    clients: HashMap<Uuid, ConnectedClientHandle<Response, TAccount>>,
+    clients: HashMap<Uuid, ConnectedClient<Response, TAccount>>,
     installations_by_account: HashMap<TAccount::Id, HashSet<Uuid>>,
     account_by_installation: HashMap<Uuid, TAccount::Id>,
 }
@@ -107,7 +106,6 @@ where
         let server = server.as_any().downcast_ref::<Self>().unwrap();
         let data = server.clients.read().await;
         if let Some(client) = data.clients.get(&installation_id) {
-            let client = client.read().await;
             let _ = client.send(WsBatchResponse::from_response(response)).await;
         }
     }
@@ -119,7 +117,6 @@ where
         if let Some(clients) = data.installations_by_account.get(&account_id) {
             for installation_id in clients {
                 if let Some(client) = data.clients.get(&installation_id) {
-                    let client = client.read().await;
                     let _ = client
                         .send(WsBatchResponse::from_response(response.clone()))
                         .await;
@@ -144,11 +141,8 @@ where
         self.logic.handle_websocket_error(error).await
     }
 
-    async fn disconnect(&self, client: ConnectedClientHandle<L::Response, L::Account>) {
-        if let Some(installation) = {
-            let client = client.read().await;
-            client.installation
-        } {
+    async fn disconnect(&self, client: ConnectedClient<L::Response, L::Account>) {
+        if let Some(installation) = client.installation().await {
             let mut data = self.clients.write().await;
 
             data.clients.remove(&installation.id);
@@ -177,7 +171,7 @@ where
 
     async fn handle_request(
         &self,
-        client_handle: &ConnectedClientHandle<L::Response, L::Account>,
+        client_handle: &ConnectedClient<L::Response, L::Account>,
         ws_request: WsRequest<L::Request>,
     ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
         match ws_request.request {
@@ -206,9 +200,8 @@ where
                         self.connect(config, client_handle).await;
 
                         let nonce = {
-                            let mut client = client_handle.write().await;
                             let nonce = challenge::nonce();
-                            client.nonce = Some(nonce);
+                            client_handle.set_nonce(nonce).await;
                             nonce
                         };
                         return Ok(ServerRequestHandling::Respond(ServerResponse::Challenge {
@@ -233,13 +226,12 @@ where
             }
             ServerRequest::ChallengeResponse(response) => {
                 let (installation, nonce) = {
-                    let client = client_handle.read().await;
-                    let installation = client.installation.clone().ok_or_else(|| {
+                    let installation = client_handle.installation().await.ok_or_else(|| {
                         anyhow::anyhow!(
                             "Challenge responded on socket that didn't have installation_id setup"
                         )
                     })?;
-                    let nonce = client.nonce.ok_or_else(|| {
+                    let nonce = client_handle.nonce().await.ok_or_else(|| {
                         anyhow::anyhow!(
                             "Challenge responded on socket that didn't have nonce setup"
                         )
@@ -277,8 +269,9 @@ where
                 original_timestamp,
                 timestamp,
             } => {
-                let mut client = client_handle.write().await;
-                client.network_timing.update(original_timestamp, timestamp);
+                client_handle
+                    .update_network_timing(original_timestamp, timestamp)
+                    .await;
                 Ok(ServerRequestHandling::NoResponse)
             }
             ServerRequest::Request(request) => self
@@ -322,7 +315,7 @@ where
             }
         });
 
-        let client = Handle::new(ConnectedClient::new(sender.clone()));
+        let client = ConnectedClient::new(sender.clone());
         while let Some(result) = rx.next().await {
             match result {
                 Ok(message) => {
@@ -338,12 +331,14 @@ where
                                     }
                                 }
                                 Err(err) => {
+                                    // TODO switch to logging
                                     println!("Error handling message. Disconnecting. {:?}", err);
                                     break;
                                 }
                             }
                         }
                         Err(cbor_error) => {
+                            // TODO switch to logging
                             println!("Error decoding cbor {:?}", cbor_error);
                             break;
                         }
@@ -363,30 +358,25 @@ where
     async fn connect(
         &self,
         installation: InstallationConfig,
-        client: &ConnectedClientHandle<L::Response, L::Account>,
+        client: &ConnectedClient<L::Response, L::Account>,
     ) {
         let mut data = self.clients.write().await;
         data.clients.insert(installation.id, client.clone());
         {
-            let mut client = client.write().await;
-            client.installation = Some(installation);
+            client.set_installation(installation).await;
         }
     }
 
     async fn associate_account(&self, installation_id: Uuid, account: Handle<L::Account>) {
         let mut data = self.clients.write().await;
-        println!("Locked Clients");
         if let Some(client) = data.clients.get_mut(&installation_id) {
-            let mut client = client.write().await;
-            println!("Locked Client");
-            client.account = Some(account.clone());
+            client.set_account(account.clone()).await;
         }
 
         let account_id = {
             let account = account.read().await;
             account.id()
         };
-        println!("Read account_id");
 
         data.account_by_installation
             .insert(installation_id, account_id);
@@ -531,7 +521,7 @@ mod tests {
 
         async fn handle_request(
             &self,
-            _client: &ConnectedClientHandle<Self::Response, Self::Account>,
+            _client: &ConnectedClient<Self::Response, Self::Account>,
             _request: Self::Request,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             unimplemented!()
@@ -581,16 +571,12 @@ mod tests {
     async fn simulated_events() -> anyhow::Result<()> {
         let installation_no_account = InstallationConfig::default();
         let (sender, _) = async_channel::unbounded();
-        let client_no_account = Handle::new(ConnectedClient::new_with_installation(
-            installation_no_account,
-            sender,
-        ));
+        let client_no_account =
+            ConnectedClient::new_with_installation(installation_no_account, sender);
         let installation_has_account = InstallationConfig::default();
         let (sender, _) = async_channel::unbounded();
-        let client_has_account = Handle::new(ConnectedClient::new_with_installation(
-            installation_has_account,
-            sender,
-        ));
+        let client_has_account =
+            ConnectedClient::new_with_installation(installation_has_account, sender);
 
         let server = Server::new(TestServer {
             logged_in_installations: hashmap! {
@@ -608,10 +594,6 @@ mod tests {
         {
             let data = server.clients.read().await;
             assert_eq!(1, data.clients.len());
-            assert!(Handle::ptr_eq(
-                &data.clients[&installation_no_account.id],
-                &client_no_account
-            ));
             assert_eq!(0, data.account_by_installation.len());
             assert_eq!(0, data.installations_by_account.len());
 
@@ -626,10 +608,6 @@ mod tests {
         {
             let data = server.clients.read().await;
             assert_eq!(2, data.clients.len());
-            assert!(Handle::ptr_eq(
-                &data.clients[&installation_has_account.id],
-                &client_has_account
-            ));
             assert_eq!(0, data.account_by_installation.len());
             assert_eq!(0, data.installations_by_account.len());
 
@@ -648,10 +626,6 @@ mod tests {
         {
             let data = server.clients.read().await;
             assert_eq!(2, data.clients.len());
-            assert!(Handle::ptr_eq(
-                &data.clients[&installation_has_account.id],
-                &client_has_account
-            ));
             assert_eq!(1, data.account_by_installation.len());
             assert_eq!(1, data.installations_by_account.len());
 

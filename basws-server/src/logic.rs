@@ -1,4 +1,4 @@
-use crate::{ConnectedClientHandle, ErrorHandling, RequestHandling};
+use crate::{connected_client::ConnectedClient, ErrorHandling, RequestHandling};
 use async_handle::Handle;
 use async_trait::async_trait;
 use basws_shared::{protocol::InstallationConfig, Uuid, VersionReq};
@@ -22,10 +22,10 @@ pub trait ServerLogic: Send + Sync {
         + Debug;
     type AccountId: Copy + Hash + Eq + Send + Sync;
 
-    // TODO Make ConnectedClientHandle an opaque type
+    // TODO Make ConnectedClient an opaque type
     async fn handle_request(
         &self,
-        client: &ConnectedClientHandle<Self::Response, Self::Account>,
+        client: &ConnectedClient<Self::Response, Self::Account>,
         request: Self::Request,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
 

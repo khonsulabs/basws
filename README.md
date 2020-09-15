@@ -2,7 +2,7 @@
 
 basws is a simple framework that aims to simplify the amount of code required to build an interactive WebSocket API.
 
-basws is built atop [warp](https://github.com/seanmonstar/warp) on the server, and [yarws](https://github.com/ianic/yarws) on the client. Both crates utilize [tokio](https://tokio.rs/).
+basws is built atop [warp](https://github.com/seanmonstar/warp) on the server, and [tokio-tungstenite](https://github.com/snapview/tokio-tungstenite) on the client. Both crates utilize the [tokio](https://tokio.rs/) runtime.
 
 ## Features
 
@@ -12,8 +12,3 @@ basws is built atop [warp](https://github.com/seanmonstar/warp) on the server, a
 - Provides network timing statistics on both the server and client
 
 For a simple example, check out chat example in the [./basws/examples](basws/examples) directory.
-
-## Concepts
-
-- **Installation**: An API client, represented by a [Uuid](https://en.wikipedia.org/wiki/Universally_unique_identifier).
-- **Account**: Some data type that has an ID that represents something an Installation can be linked to.

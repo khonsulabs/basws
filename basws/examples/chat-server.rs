@@ -2,8 +2,7 @@
 extern crate log;
 use basws::{
     server::{
-        async_trait, ConnectedClientHandle, Handle, Identifiable, RequestHandling, Server,
-        ServerLogic,
+        async_trait, ConnectedClient, Handle, Identifiable, RequestHandling, Server, ServerLogic,
     },
     shared::{protocol::InstallationConfig, Uuid, VersionReq},
 };
@@ -60,16 +59,13 @@ impl ServerLogic for ChatServer {
 
     async fn handle_request(
         &self,
-        client: &ConnectedClientHandle<Self::Response, Self::Account>,
+        client: &ConnectedClient<Self::Response, Self::Account>,
         request: Self::Request,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         match request {
             ChatRequest::Login { username } => {
                 info!("Received login request: {}", username);
-                let installation_id = {
-                    let client = client.read().await;
-                    client.installation.unwrap().id
-                };
+                let installation = client.installation().await.unwrap();
                 let mut screennames = self.screennames.write().await;
                 let account = if let Some(&account_id) = screennames.get(&username) {
                     let accounts = self.accounts.read().await;
@@ -91,7 +87,7 @@ impl ServerLogic for ChatServer {
                     account
                 };
 
-                Server::<Self>::associate_installation_with_account(installation_id, account)
+                Server::<Self>::associate_installation_with_account(installation.id, account)
                     .await?;
 
                 Ok(RequestHandling::Respond(ChatResponse::LoggedIn {
@@ -100,11 +96,10 @@ impl ServerLogic for ChatServer {
             }
             ChatRequest::Chat { message } => {
                 let from = {
-                    let client = client.read().await;
-                    if let Some(account) = &client.account {
+                    if let Some(account) = client.account().await {
                         let account = account.read().await;
                         ChatSender::User(account.username.clone())
-                    } else if let Some(installation) = client.installation {
+                    } else if let Some(installation) = client.installation().await {
                         ChatSender::Anonymous(installation.id)
                     } else {
                         anyhow::bail!("Client did not finish handshake before chatting");

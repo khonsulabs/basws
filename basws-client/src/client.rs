@@ -128,28 +128,26 @@ where
 
     pub async fn run(self) -> anyhow::Result<()> {
         loop {
-            // let socket = match Client::new(server_url).connect().await {
-            //     Ok(socket) => socket,
-            //     Err(err) => {
-            //         println!("Error connecting to socket. {}", err);
-            //         tokio::time::delay_for(Duration::from_millis(100)).await;
-            //         Client::set_login_state(LoginState::Error { message: None }).await;
-            //         continue;
-            //     }
-            // };
             let url = self.server_url().await;
 
-            match connect_async(url).await {
+            let reconnect_delay = match connect_async(url).await {
                 Ok((ws, _)) => {
                     let (tx, rx) = ws.split();
                     let _ = tokio::try_join!(self.send_loop(tx), self.receive_loop(rx));
+                    None
                 }
                 Err(err) => {
+                    // TODO report this to the client logic instead of printing it
                     println!("Error connecting to server: {:?}", err);
+                    Some(tokio::time::Duration::from_millis(500))
                 }
-            }
+            };
+
             self.set_login_state(LoginState::Disconnected).await?;
-            tokio::time::delay_for(tokio::time::Duration::from_millis(500)).await
+
+            if let Some(delay) = reconnect_delay {
+                tokio::time::delay_for(delay).await
+            }
         }
     }
 
@@ -162,15 +160,15 @@ where
                 Some(Ok(Message::Binary(bytes))) => {
                     match serde_cbor::from_slice::<WsBatchResponse<L::Response>>(&bytes) {
                         Ok(response) => self.handle_batch_response(response).await?,
-                        Err(error) => println!("Error deserializing message. {:?}", error),
+                        Err(error) => {
+                            // TODO should this be reported, or is ignoring correct?
+                            // println is definitely not correct.
+                            println!("Error deserializing message. {:?}", error)
+                        }
                     }
                 }
-                Some(Err(err)) => {
-                    println!("Websocket Error: {:?}", err);
-                    anyhow::bail!("Error on websocket");
-                }
+                Some(Err(err)) => return Err(anyhow::Error::from(err)),
                 None => {
-                    println!("Socket Disconnected");
                     anyhow::bail!("Disconnected on read");
                 }
                 _ => {}
@@ -259,8 +257,7 @@ where
                 .send(Message::Binary(serde_cbor::to_vec(&request).unwrap()))
                 .await
             {
-                println!("Error sending message: {}", err);
-                anyhow::bail!("Disconnected on send");
+                return Err(anyhow::Error::from(err));
             }
         }
     }
