@@ -7,7 +7,11 @@ description = "A simple async WebSocket client/server framework"
 readme = "./README.md"
 license = "MIT"
 keywords = ["websocket", "tokio"]
-categories = ["websocket", "network-programming", "asynchronous"]
+categories = [
+    "web-programming::websocket",
+    "network-programming",
+    "asynchronous"
+]
 repository = "https://github.com/khonsulabs/basws"
 
 [dependencies]
