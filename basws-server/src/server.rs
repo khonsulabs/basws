@@ -1,4 +1,5 @@
 use crate::{connected_client::ConnectedClient, Identifiable, WebsocketServerLogic};
+pub use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
 use basws_shared::{
@@ -8,7 +9,7 @@ use basws_shared::{
 };
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
-use std::{collections::HashMap, collections::HashSet, sync::Arc};
+use std::{collections::HashMap, collections::HashSet};
 use uuid::Uuid;
 use warp::ws::Message;
 
@@ -16,15 +17,12 @@ static SERVER: OnceCell<RwLock<Box<dyn ServerPublicApi>>> = OnceCell::new();
 
 #[async_trait]
 pub(crate) trait ServerPublicApi: Send + Sync {
-    async fn handle_connection(&self, ws: warp::ws::WebSocket);
     fn as_any(&self) -> &'_ dyn std::any::Any;
 }
 
-pub type ConnectedClientHandle<Response, Account> = Arc<RwLock<ConnectedClient<Response, Account>>>;
+pub type ConnectedClientHandle<Response, Account> = Handle<ConnectedClient<Response, Account>>;
 #[allow(type_alias_bounds)] // This warning is a false positive. Without the bounds, we can't use ::Id
-pub type AccountMap<TAccount: Identifiable> =
-    Arc<RwLock<HashMap<TAccount::Id, AccountHandle<TAccount>>>>;
-pub type AccountHandle<Account> = Arc<RwLock<Account>>;
+pub type AccountMap<TAccount: Identifiable> = Handle<HashMap<TAccount::Id, Handle<TAccount>>>;
 
 pub struct WebsocketServer<L>
 where
@@ -62,58 +60,6 @@ impl<L> ServerPublicApi for WebsocketServer<L>
 where
     L: WebsocketServerLogic + 'static,
 {
-    async fn handle_connection(&self, ws: warp::ws::WebSocket) {
-        let (mut tx, mut rx) = ws.split();
-
-        let (sender, transmission_receiver) =
-            async_channel::unbounded::<WsBatchResponse<L::Response>>();
-
-        tokio::spawn(async move {
-            while let Ok(response) = transmission_receiver.recv().await {
-                tx.send(Message::binary(serde_cbor::to_vec(&response).unwrap()))
-                    .await
-                    .unwrap_or_default()
-            }
-        });
-
-        let client = Arc::new(RwLock::new(ConnectedClient::new(sender.clone())));
-        while let Some(result) = rx.next().await {
-            match result {
-                Ok(message) => {
-                    match serde_cbor::from_slice::<WsRequest<L::Request>>(message.as_bytes()) {
-                        Ok(ws_request) => {
-                            let request_id = ws_request.id;
-                            match self.handle_request(&client, ws_request).await {
-                                Ok(responses) => {
-                                    if let Some(batch) = responses.into_batch(request_id) {
-                                        if sender.send(batch).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    println!("Error handling message. Disconnecting. {:?}", err);
-                                    break;
-                                }
-                            }
-                        }
-                        Err(cbor_error) => {
-                            println!("Error decoding cbor {:?}", cbor_error);
-                            break;
-                        }
-                    }
-                }
-                Err(err) => {
-                    if let ErrorHandling::Disconnect = self.websocket_error(err).await {
-                        break;
-                    }
-                }
-            }
-        }
-
-        self.disconnect(client).await;
-    }
-
     fn as_any(&self) -> &'_ dyn std::any::Any {
         self
     }
@@ -137,7 +83,21 @@ where
 
     pub async fn incoming_connection(ws: warp::ws::WebSocket) {
         let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = server.as_any().downcast_ref::<Self>().unwrap();
         server.handle_connection(ws).await
+    }
+
+    pub async fn broadcast(response: L::Response) {
+        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = server.as_any().downcast_ref::<Self>().unwrap();
+        let data = server.clients.read().await;
+
+        futures::future::join_all(
+            data.clients
+                .keys()
+                .map(|&id| Self::send_to_installation_id(id, response.clone())),
+        )
+        .await;
     }
 
     pub async fn send_to_installation_id(installation_id: Uuid, response: L::Response) {
@@ -164,6 +124,18 @@ where
                 }
             }
         }
+    }
+
+    pub async fn associate_installation_with_account(
+        installation_id: Uuid,
+        account: Handle<L::Account>,
+    ) -> anyhow::Result<()> {
+        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = server.as_any().downcast_ref::<Self>().unwrap();
+
+        server.associate_account(installation_id, account).await?;
+
+        Ok(())
     }
 
     async fn websocket_error(&self, error: warp::Error) -> ErrorHandling {
@@ -230,10 +202,11 @@ where
                     .lookup_account_from_installation_id(installation_id)
                     .await?
                 {
-                    let account = self.associate_account(installation_id, profile).await?;
+                    self.associate_account(installation_id, profile.clone())
+                        .await?;
 
                     self.logic
-                        .client_reconnected(installation_id, account)
+                        .client_reconnected(installation_id, profile)
                         .await
                 } else {
                     self.logic.new_installation_connected(installation_id).await
@@ -253,6 +226,58 @@ where
         }
     }
 
+    async fn handle_connection(&self, ws: warp::ws::WebSocket) {
+        let (mut tx, mut rx) = ws.split();
+
+        let (sender, transmission_receiver) =
+            async_channel::unbounded::<WsBatchResponse<L::Response>>();
+
+        tokio::spawn(async move {
+            while let Ok(response) = transmission_receiver.recv().await {
+                tx.send(Message::binary(serde_cbor::to_vec(&response).unwrap()))
+                    .await
+                    .unwrap_or_default()
+            }
+        });
+
+        let client = Handle::new(ConnectedClient::new(sender.clone()));
+        while let Some(result) = rx.next().await {
+            match result {
+                Ok(message) => {
+                    match serde_cbor::from_slice::<WsRequest<L::Request>>(message.as_bytes()) {
+                        Ok(ws_request) => {
+                            let request_id = ws_request.id;
+                            match self.handle_request(&client, ws_request).await {
+                                Ok(responses) => {
+                                    if let Some(batch) = responses.into_batch(request_id) {
+                                        if sender.send(batch).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    println!("Error handling message. Disconnecting. {:?}", err);
+                                    break;
+                                }
+                            }
+                        }
+                        Err(cbor_error) => {
+                            println!("Error decoding cbor {:?}", cbor_error);
+                            break;
+                        }
+                    }
+                }
+                Err(err) => {
+                    if let ErrorHandling::Disconnect = self.websocket_error(err).await {
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.disconnect(client).await;
+    }
+
     async fn connect(
         &self,
         installation_id: Uuid,
@@ -269,11 +294,8 @@ where
     async fn associate_account(
         &self,
         installation_id: Uuid,
-        account: AccountHandle<L::Account>,
-    ) -> anyhow::Result<AccountHandle<L::Account>> {
-        // let account = self
-        //     .lookup_account_from_installation_id(installation_id)
-        //     .await?;
+        account: Handle<L::Account>,
+    ) -> anyhow::Result<()> {
         let mut data = self.clients.write().await;
         if let Some(client) = data.clients.get_mut(&installation_id) {
             let mut client = client.write().await;
@@ -292,13 +314,13 @@ where
             .entry(account_id)
             .or_insert_with(HashSet::new);
         installations.insert(installation_id);
-        Ok(account)
+        Ok(())
     }
 
     async fn lookup_account_from_installation_id(
         &self,
         installation_id: Uuid,
-    ) -> anyhow::Result<Option<Arc<RwLock<L::Account>>>> {
+    ) -> anyhow::Result<Option<Handle<L::Account>>> {
         match self
             .logic
             .lookup_account_from_installation_id(installation_id)
@@ -306,11 +328,12 @@ where
         {
             Some(profile) => {
                 let mut accounts_by_id = self.accounts_by_id.write().await;
+                let id = {
+                    let profile = profile.read().await;
+                    profile.id()
+                };
                 Ok(Some(
-                    accounts_by_id
-                        .entry(profile.id())
-                        .or_insert_with(|| Arc::new(RwLock::new(profile)))
-                        .clone(),
+                    accounts_by_id.entry(id).or_insert_with(|| profile).clone(),
                 ))
             }
             None => Ok(None),
@@ -396,12 +419,13 @@ mod tests {
         async fn lookup_account_from_installation_id(
             &self,
             installation_id: Uuid,
-        ) -> anyhow::Result<Option<Self::Account>> {
+        ) -> anyhow::Result<Option<Handle<Self::Account>>> {
             Ok(self
                 .logged_in_installations
                 .get(&installation_id)
                 .map(|account_id| self.accounts.get(account_id).cloned())
-                .flatten())
+                .flatten()
+                .map(Handle::new))
         }
 
         fn check_protocol_version(&self, version: &str) -> ErrorHandling {
@@ -422,7 +446,7 @@ mod tests {
         async fn client_reconnected(
             &self,
             _installation_id: Uuid,
-            _account: AccountHandle<Self::Account>,
+            _account: Handle<Self::Account>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             todo!()
         }
@@ -439,16 +463,16 @@ mod tests {
     async fn simulated_events() -> anyhow::Result<()> {
         let installation_no_account = Uuid::new_v4();
         let (sender, _) = async_channel::unbounded();
-        let client_no_account = Arc::new(RwLock::new(ConnectedClient::new_with_installation_id(
+        let client_no_account = Handle::new(ConnectedClient::new_with_installation_id(
             installation_no_account,
             sender,
-        )));
+        ));
         let installation_has_account = Uuid::new_v4();
         let (sender, _) = async_channel::unbounded();
-        let client_has_account = Arc::new(RwLock::new(ConnectedClient::new_with_installation_id(
+        let client_has_account = Handle::new(ConnectedClient::new_with_installation_id(
             installation_has_account,
             sender,
-        )));
+        ));
 
         let server = WebsocketServer::new(TestServer {
             logged_in_installations: hashmap! {
@@ -467,7 +491,7 @@ mod tests {
         {
             let data = server.clients.read().await;
             assert_eq!(1, data.clients.len());
-            assert!(Arc::ptr_eq(
+            assert!(Handle::ptr_eq(
                 &data.clients[&installation_no_account],
                 &client_no_account
             ));
@@ -485,7 +509,7 @@ mod tests {
         {
             let data = server.clients.read().await;
             assert_eq!(2, data.clients.len());
-            assert!(Arc::ptr_eq(
+            assert!(Handle::ptr_eq(
                 &data.clients[&installation_has_account],
                 &client_has_account
             ));
@@ -507,7 +531,7 @@ mod tests {
         {
             let data = server.clients.read().await;
             assert_eq!(2, data.clients.len());
-            assert!(Arc::ptr_eq(
+            assert!(Handle::ptr_eq(
                 &data.clients[&installation_has_account],
                 &client_has_account
             ));

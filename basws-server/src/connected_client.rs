@@ -1,12 +1,12 @@
-use crate::AccountHandle;
 use async_channel::Sender;
+use async_handle::Handle;
 use basws_shared::{protocol::WsBatchResponse, timing::NetworkTiming};
 use uuid::Uuid;
 
 pub struct ConnectedClient<Response, Account> {
     pub installation_id: Option<Uuid>,
     sender: Sender<WsBatchResponse<Response>>,
-    pub account: Option<AccountHandle<Account>>,
+    pub account: Option<Handle<Account>>,
     pub network_timing: NetworkTiming,
 }
 

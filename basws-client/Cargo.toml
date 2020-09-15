@@ -6,3 +6,15 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+tokio-tungstenite = "0.11"
+tokio = { version = "0.2" }
+async-handle = "0.1"
+async-channel = "1"
+basws-shared = { path = "../basws-shared" }
+async-trait = "0.1"
+serde = "1"
+serde_cbor = "0.11"
+url = "2"
+futures = "0.3"
+anyhow = "1"
+uuid = "0.8"

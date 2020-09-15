@@ -9,6 +9,7 @@ edition = "2018"
 warp = "0.2"
 futures = "0.3"
 async-rwlock = "1"
+async-handle = "0.1"
 async-channel = "1"
 uuid = { version = "0.8", features = ["v4", "serde"] }
 basws-shared = { path = "../basws-shared" }
