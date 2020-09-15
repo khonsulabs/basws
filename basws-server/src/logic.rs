@@ -11,7 +11,7 @@ pub trait Identifiable {
 }
 
 #[async_trait]
-pub trait WebsocketServerLogic: Send + Sync {
+pub trait ServerLogic: Send + Sync {
     type Request: Serialize + DeserializeOwned + Clone + Send + Sync + Debug;
     type Response: Serialize + DeserializeOwned + Clone + Send + Sync + Debug;
     type Account: Identifiable<Id = Self::AccountId>

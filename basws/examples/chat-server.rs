@@ -1,7 +1,9 @@
+#[macro_use]
+extern crate log;
 use basws::{
     server::{
-        async_trait, ConnectedClientHandle, Handle, Identifiable, RequestHandling, WebsocketServer,
-        WebsocketServerLogic,
+        async_trait, ConnectedClientHandle, Handle, Identifiable, RequestHandling, Server,
+        ServerLogic,
     },
     shared::{protocol::InstallationConfig, Uuid, VersionReq},
 };
@@ -13,6 +15,20 @@ pub mod shared;
 use shared::chat::{
     protocol_version_requirements, ChatRequest, ChatResponse, ChatSender, SERVER_PORT,
 };
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    pretty_env_logger::init();
+    Server::initialize(ChatServer::default());
+
+    let routes = warp::path("ws").and(warp::ws()).map(|ws: warp::ws::Ws| {
+        // And then our closure will be called when it completes...
+        ws.on_upgrade(|ws| async { Server::<ChatServer>::incoming_connection(ws).await })
+    });
+
+    warp::serve(routes).run(([127, 0, 0, 1], SERVER_PORT)).await;
+    Ok(())
+}
 
 #[derive(Default)]
 struct ChatServer {
@@ -36,7 +52,7 @@ impl Identifiable for Account {
 }
 
 #[async_trait]
-impl WebsocketServerLogic for ChatServer {
+impl ServerLogic for ChatServer {
     type Request = ChatRequest;
     type Response = ChatResponse;
     type Account = Account;
@@ -49,7 +65,7 @@ impl WebsocketServerLogic for ChatServer {
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         match request {
             ChatRequest::Login { username } => {
-                println!("Received login request: {}", username);
+                info!("Received login request: {}", username);
                 let installation_id = {
                     let client = client.read().await;
                     client.installation.unwrap().id
@@ -74,14 +90,9 @@ impl WebsocketServerLogic for ChatServer {
                     screennames.insert(username.clone(), id);
                     account
                 };
-                println!("Associating");
 
-                WebsocketServer::<Self>::associate_installation_with_account(
-                    installation_id,
-                    account,
-                )
-                .await?;
-                println!("Responding");
+                Server::<Self>::associate_installation_with_account(installation_id, account)
+                    .await?;
 
                 Ok(RequestHandling::Respond(ChatResponse::LoggedIn {
                     username,
@@ -100,8 +111,7 @@ impl WebsocketServerLogic for ChatServer {
                     }
                 };
 
-                WebsocketServer::<Self>::broadcast(ChatResponse::ChatReceived { from, message })
-                    .await;
+                Server::<Self>::broadcast(ChatResponse::ChatReceived { from, message }).await;
 
                 Ok(RequestHandling::NoResponse)
             }
@@ -112,7 +122,7 @@ impl WebsocketServerLogic for ChatServer {
         &self,
         installation_id: Uuid,
     ) -> anyhow::Result<Option<Handle<Self::Account>>> {
-        println!("Looking up account: {}", installation_id);
+        trace!("Looking up account: {}", installation_id);
         let installation_accounts = self.installation_accounts.read().await;
 
         let account = if let Some(account_id) = installation_accounts.get(&installation_id) {
@@ -152,7 +162,7 @@ impl WebsocketServerLogic for ChatServer {
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         if let Some(account) = account {
             let account = account.read().await;
-            println!(
+            info!(
                 "Previously authenticated client reconnected: {} ({})",
                 account.username, installation_id
             );
@@ -160,7 +170,7 @@ impl WebsocketServerLogic for ChatServer {
                 username: account.username.clone(),
             }))
         } else {
-            println!(
+            info!(
                 "Previously connected anonymous client reconnected: {}",
                 installation_id
             );
@@ -172,20 +182,7 @@ impl WebsocketServerLogic for ChatServer {
         &self,
         installation_id: Uuid,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
-        println!("New client connected: {}", installation_id);
+        info!("New client connected: {}", installation_id);
         Ok(RequestHandling::Respond(ChatResponse::Unauthenticated))
     }
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    WebsocketServer::initialize(ChatServer::default());
-
-    let routes = warp::path("ws").and(warp::ws()).map(|ws: warp::ws::Ws| {
-        // And then our closure will be called when it completes...
-        ws.on_upgrade(|ws| async { WebsocketServer::<ChatServer>::incoming_connection(ws).await })
-    });
-
-    warp::serve(routes).run(([127, 0, 0, 1], SERVER_PORT)).await;
-    Ok(())
 }

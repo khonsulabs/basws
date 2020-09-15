@@ -1,4 +1,4 @@
-use crate::{logic::WebsocketClientLogic, login_state::LoginState};
+use crate::{logic::ClientLogic, login_state::LoginState};
 use async_channel::Receiver;
 use async_handle::Handle;
 use basws_shared::{
@@ -20,14 +20,14 @@ use data::ClientData;
 
 pub struct Client<L>
 where
-    L: WebsocketClientLogic + ?Sized,
+    L: ClientLogic + ?Sized,
 {
     data: Handle<ClientData<L>>,
 }
 
 impl<L> Clone for Client<L>
 where
-    L: WebsocketClientLogic,
+    L: ClientLogic,
 {
     fn clone(&self) -> Self {
         Self {
@@ -38,7 +38,7 @@ where
 
 impl<L> Client<L>
 where
-    L: WebsocketClientLogic + 'static,
+    L: ClientLogic + 'static,
 {
     pub fn new(logic: L) -> Self {
         let (sender, receiver) = async_channel::unbounded();

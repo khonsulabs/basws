@@ -2,7 +2,7 @@
 extern crate log;
 
 use basws::{
-    client::{async_trait, Client, LoginState, Url, WebsocketClientLogic},
+    client::{async_trait, Client, ClientLogic, LoginState, Url},
     shared::{
         protocol::{InstallationConfig, ServerError},
         Version,
@@ -60,7 +60,7 @@ struct ChatClient {
 }
 
 #[async_trait]
-impl WebsocketClientLogic for ChatClient {
+impl ClientLogic for ChatClient {
     type Request = ChatRequest;
     type Response = ChatResponse;
 

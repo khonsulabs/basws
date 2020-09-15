@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use url::Url;
 
 #[async_trait]
-pub trait WebsocketClientLogic: Send + Sync {
+pub trait ClientLogic: Send + Sync {
     type Request: Serialize + DeserializeOwned + Sync + Send + Clone + Debug;
     type Response: Serialize + DeserializeOwned + Sync + Send + Clone + Debug;
 

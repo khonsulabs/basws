@@ -1,4 +1,4 @@
-use crate::{logic::WebsocketClientLogic, login_state::LoginState};
+use crate::{logic::ClientLogic, login_state::LoginState};
 use async_channel::{Receiver, Sender};
 use async_handle::Handle;
 use basws_shared::protocol::{ServerRequest, WsRequest};
@@ -8,7 +8,7 @@ static REQUEST_COUNTER: OnceCell<Handle<u64>> = OnceCell::new();
 
 pub(crate) struct ClientData<L>
 where
-    L: WebsocketClientLogic + ?Sized,
+    L: ClientLogic + ?Sized,
 {
     pub(crate) logic: Box<L>,
     pub(crate) login_state: LoginState,
@@ -20,7 +20,7 @@ where
 
 impl<L> ClientData<L>
 where
-    L: WebsocketClientLogic + 'static,
+    L: ClientLogic + 'static,
 {
     pub async fn send(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
         let id = {

@@ -1,4 +1,4 @@
-use crate::{connected_client::ConnectedClient, Identifiable, WebsocketServerLogic};
+use crate::{connected_client::ConnectedClient, Identifiable, ServerLogic};
 use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
@@ -26,9 +26,9 @@ pub type ConnectedClientHandle<Response, Account> = Handle<ConnectedClient<Respo
 #[allow(type_alias_bounds)] // This warning is a false positive. Without the bounds, we can't use ::Id
 pub type AccountMap<TAccount: Identifiable> = Handle<HashMap<TAccount::Id, Handle<TAccount>>>;
 
-pub struct WebsocketServer<L>
+pub struct Server<L>
 where
-    L: WebsocketServerLogic,
+    L: ServerLogic,
 {
     logic: L,
     clients: RwLock<ClientData<L::Response, L::Account>>,
@@ -58,18 +58,18 @@ where
 }
 
 #[async_trait]
-impl<L> ServerPublicApi for WebsocketServer<L>
+impl<L> ServerPublicApi for Server<L>
 where
-    L: WebsocketServerLogic + 'static,
+    L: ServerLogic + 'static,
 {
     fn as_any(&self) -> &'_ dyn std::any::Any {
         self
     }
 }
 
-impl<L> WebsocketServer<L>
+impl<L> Server<L>
 where
-    L: WebsocketServerLogic + 'static,
+    L: ServerLogic + 'static,
 {
     fn new(logic: L) -> Self {
         Self {
@@ -498,7 +498,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logic::WebsocketServerLogic;
+    use crate::logic::ServerLogic;
     use async_trait::async_trait;
     use basws_shared::VersionReq;
     use maplit::hashmap;
@@ -523,7 +523,7 @@ mod tests {
 
     #[async_trait]
     #[allow(clippy::unit_arg)]
-    impl WebsocketServerLogic for TestServer {
+    impl ServerLogic for TestServer {
         type Request = ();
         type Response = ();
         type Account = TestAccount;
@@ -592,7 +592,7 @@ mod tests {
             sender,
         ));
 
-        let server = WebsocketServer::new(TestServer {
+        let server = Server::new(TestServer {
             logged_in_installations: hashmap! {
                 installation_has_account.id => Some(1),
             },
