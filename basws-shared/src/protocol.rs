@@ -60,6 +60,9 @@ pub enum ServerResponse<T> {
     Challenge {
         nonce: [u8; 32],
     },
+    Connected {
+        installation_id: Uuid,
+    },
     Response(T),
     Error(ServerError),
 }

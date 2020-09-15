@@ -22,6 +22,7 @@ pub trait WebsocketServerLogic: Send + Sync {
         + Debug;
     type AccountId: Copy + Hash + Eq + Send + Sync;
 
+    // TODO Make ConnectedClientHandle an opaque type
     async fn handle_request(
         &self,
         client: &ConnectedClientHandle<Self::Response, Self::Account>,

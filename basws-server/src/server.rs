@@ -14,7 +14,7 @@ use once_cell::sync::OnceCell;
 use std::{collections::HashMap, collections::HashSet};
 use warp::ws::Message;
 
-static SERVER: OnceCell<RwLock<Box<dyn ServerPublicApi>>> = OnceCell::new();
+static SERVER: OnceCell<Box<dyn ServerPublicApi>> = OnceCell::new();
 
 #[async_trait]
 pub(crate) trait ServerPublicApi: Send + Sync {
@@ -79,17 +79,17 @@ where
     }
 
     pub fn initialize(logic: L) {
-        let _ = SERVER.set(RwLock::new(Box::new(Self::new(logic))));
+        let _ = SERVER.set(Box::new(Self::new(logic)));
     }
 
     pub async fn incoming_connection(ws: warp::ws::WebSocket) {
-        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = SERVER.get().expect("Server never initialized");
         let server = server.as_any().downcast_ref::<Self>().unwrap();
         server.handle_connection(ws).await
     }
 
     pub async fn broadcast(response: L::Response) {
-        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = SERVER.get().expect("Server never initialized");
         let server = server.as_any().downcast_ref::<Self>().unwrap();
         let data = server.clients.read().await;
 
@@ -102,7 +102,7 @@ where
     }
 
     pub async fn send_to_installation_id(installation_id: Uuid, response: L::Response) {
-        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = SERVER.get().expect("Server never initialized");
         let server = server.as_any().downcast_ref::<Self>().unwrap();
         let data = server.clients.read().await;
         if let Some(client) = data.clients.get(&installation_id) {
@@ -112,7 +112,7 @@ where
     }
 
     pub async fn send_to_account_id(account_id: L::AccountId, response: L::Response) {
-        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = SERVER.get().expect("Server never initialized");
         let server = server.as_any().downcast_ref::<Self>().unwrap();
         let data = server.clients.read().await;
         if let Some(clients) = data.installations_by_account.get(&account_id) {
@@ -131,10 +131,10 @@ where
         installation_id: Uuid,
         account: Handle<L::Account>,
     ) -> anyhow::Result<()> {
-        let server = SERVER.get().expect("Server never initialized").read().await;
+        let server = SERVER.get().expect("Server never initialized");
         let server = server.as_any().downcast_ref::<Self>().unwrap();
 
-        server.associate_account(installation_id, account).await?;
+        server.associate_account(installation_id, account).await;
 
         Ok(())
     }
@@ -241,26 +241,31 @@ where
                     (installation, nonce)
                 };
 
-                if challenge::compute_challenge(&installation.private_key, &nonce) == response {
+                let logic_response = if challenge::compute_challenge(
+                    &installation.private_key,
+                    &nonce,
+                ) == response
+                {
                     let profile = self
                         .lookup_account_from_installation_id(installation.id)
                         .await?;
 
                     if let Some(profile) = &profile {
                         self.associate_account(installation.id, profile.clone())
-                            .await?;
+                            .await;
                     }
 
                     self.logic
                         .client_reconnected(installation.id, profile)
-                        .await
-                        .map(|result| result.into_server_handling())
+                        .await?
                 } else {
                     self.logic
                         .new_installation_connected(installation.id)
-                        .await
-                        .map(|result| result.into_server_handling())
-                }
+                        .await?
+                };
+                Ok(ServerRequestHandling::Respond(ServerResponse::Connected {
+                    installation_id: installation.id,
+                }) + logic_response.into_server_handling())
             }
             ServerRequest::Pong {
                 original_timestamp,
@@ -343,14 +348,12 @@ where
         }
     }
 
-    async fn associate_account(
-        &self,
-        installation_id: Uuid,
-        account: Handle<L::Account>,
-    ) -> anyhow::Result<()> {
+    async fn associate_account(&self, installation_id: Uuid, account: Handle<L::Account>) {
         let mut data = self.clients.write().await;
+        println!("Locked Clients");
         if let Some(client) = data.clients.get_mut(&installation_id) {
             let mut client = client.write().await;
+            println!("Locked Client");
             client.account = Some(account.clone());
         }
 
@@ -358,6 +361,7 @@ where
             let account = account.read().await;
             account.id()
         };
+        println!("Read account_id");
 
         data.account_by_installation
             .insert(installation_id, account_id);
@@ -366,7 +370,6 @@ where
             .entry(account_id)
             .or_insert_with(HashSet::new);
         installations.insert(installation_id);
-        Ok(())
     }
 
     async fn lookup_account_from_installation_id(
@@ -620,7 +623,7 @@ mod tests {
             .unwrap();
         server
             .associate_account(installation_has_account.id, account)
-            .await?;
+            .await;
 
         {
             let data = server.clients.read().await;

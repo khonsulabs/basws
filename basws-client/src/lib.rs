@@ -32,30 +32,47 @@ pub trait WebsocketClientLogic: Send + Sync {
     fn server_url(&self) -> Url;
     fn protocol_version(&self) -> String;
 
-    async fn state_changed(&self, state: &LoginState) -> anyhow::Result<()>;
+    async fn state_changed(&self, state: &LoginState, client: Client<Self>) -> anyhow::Result<()>;
     async fn stored_installation_config(&self) -> Option<InstallationConfig>;
+    async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()>;
+
     async fn response_received(
         &self,
         response: Self::Response,
         request_id: i64,
+        client: Client<Self>,
     ) -> anyhow::Result<()>;
-    async fn handle_error(&self, error: ServerError) -> anyhow::Result<()>;
-    async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()>;
+
+    async fn handle_server_error(
+        &self,
+        error: ServerError,
+        client: Client<Self>,
+    ) -> anyhow::Result<()>;
 }
 
-#[derive(Clone)]
 pub struct Client<L>
 where
-    L: WebsocketClientLogic,
+    L: WebsocketClientLogic + ?Sized,
 {
     data: Handle<ClientData<L>>,
 }
 
-struct ClientData<L>
+impl<L> Clone for Client<L>
 where
     L: WebsocketClientLogic,
 {
-    logic: L,
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+        }
+    }
+}
+
+struct ClientData<L>
+where
+    L: WebsocketClientLogic + ?Sized,
+{
+    logic: Box<L>,
     login_state: LoginState,
     sender: Sender<WsRequest<L::Request>>,
     receiver: Receiver<WsRequest<L::Request>>,
@@ -68,13 +85,12 @@ impl<L> ClientData<L>
 where
     L: WebsocketClientLogic + 'static,
 {
-    pub async fn send(&mut self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
-        println!("Sending request: {:?}", request);
+    pub async fn send(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
         let (mut id, overflowed) = self.request_counter.overflowing_add(1);
         if overflowed {
             id = 0;
         }
-        self.request_counter = id;
+        // TODO self.request_counter = id;
         self.sender.send(WsRequest { id, request }).await?;
         Ok(())
     }
@@ -88,7 +104,7 @@ where
         let (sender, receiver) = async_channel::unbounded();
         Self {
             data: Handle::new(ClientData {
-                logic,
+                logic: Box::new(logic),
                 login_state: LoginState::Disconnected,
                 sender,
                 receiver,
@@ -104,9 +120,13 @@ where
     }
 
     async fn set_login_state(&self, state: LoginState) -> anyhow::Result<()> {
+        let client = self.clone();
         let mut network = self.data.write().await;
         network.login_state = state;
-        network.logic.state_changed(&network.login_state).await
+        network
+            .logic
+            .state_changed(&network.login_state, client)
+            .await
     }
 
     pub async fn login_state(&self) -> LoginState {
@@ -144,23 +164,27 @@ where
         data.logic.stored_installation_config().await
     }
 
+    async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()> {
+        let data = self.data.read().await;
+        data.logic.store_installation_config(config).await
+    }
+
     async fn response_received(
         &self,
         response: L::Response,
         request_id: i64,
     ) -> anyhow::Result<()> {
+        let client = self.clone();
         let data = self.data.read().await;
-        data.logic.response_received(response, request_id).await
+        data.logic
+            .response_received(response, request_id, client)
+            .await
     }
 
     async fn handle_error(&self, error: ServerError) -> anyhow::Result<()> {
+        let client = self.clone();
         let data = self.data.read().await;
-        data.logic.handle_error(error).await
-    }
-
-    async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()> {
-        let data = self.data.read().await;
-        data.logic.store_installation_config(config).await
+        data.logic.handle_server_error(error, client).await
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
@@ -228,6 +252,10 @@ where
                     .await?;
                     self.store_installation_config(config).await?;
                 }
+                ServerResponse::Connected { installation_id } => {
+                    self.set_login_state(LoginState::Connected { installation_id })
+                        .await?;
+                }
                 ServerResponse::Challenge { nonce } => {
                     let config = self.stored_installation_config().await.ok_or_else(|| {
                         anyhow::anyhow!("Server issued challenge, but client has no stored config")
@@ -262,8 +290,8 @@ where
         Ok(())
     }
 
-    async fn request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
-        let mut data = self.data.write().await;
+    pub async fn request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
+        let data = self.data.read().await;
         data.send(request).await?;
         Ok(())
     }

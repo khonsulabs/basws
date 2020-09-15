@@ -1,5 +1,6 @@
 use basws::shared::Uuid;
 use serde_derive::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 pub const PROTOCOL_VERSION: &str = "0.0.1";
 pub const SERVER_PORT: u16 = 12345;
@@ -21,4 +22,13 @@ pub enum ChatResponse {
 pub enum ChatSender {
     Anonymous(Uuid),
     User(String),
+}
+
+impl Display for ChatSender {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Anonymous(uuid) => f.write_fmt(format_args!("<{}>", uuid)),
+            Self::User(username) => f.write_str(username),
+        }
+    }
 }

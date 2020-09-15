@@ -47,7 +47,11 @@ impl WebsocketServerLogic for ChatServer {
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         match request {
             ChatRequest::Login { username } => {
-                let client = client.read().await;
+                println!("Received login request: {}", username);
+                let installation_id = {
+                    let client = client.read().await;
+                    client.installation.unwrap().id
+                };
                 let mut screennames = self.screennames.write().await;
                 let account = if let Some(&account_id) = screennames.get(&username) {
                     let accounts = self.accounts.read().await;
@@ -68,12 +72,14 @@ impl WebsocketServerLogic for ChatServer {
                     screennames.insert(username.clone(), id);
                     account
                 };
+                println!("Associating");
 
                 WebsocketServer::<Self>::associate_installation_with_account(
-                    client.installation.unwrap().id,
+                    installation_id,
                     account,
                 )
                 .await?;
+                println!("Responding");
 
                 Ok(RequestHandling::Respond(ChatResponse::LoggedIn {
                     username,
@@ -170,11 +176,6 @@ impl WebsocketServerLogic for ChatServer {
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         println!("New client connected: {}", installation_id);
         Ok(RequestHandling::Respond(ChatResponse::Unauthenticated))
-    }
-
-    async fn handle_websocket_error(&self, err: warp::Error) -> ErrorHandling {
-        println!("Error on socket: {:?}", err);
-        ErrorHandling::Disconnect
     }
 }
 
