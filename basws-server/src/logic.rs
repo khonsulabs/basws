@@ -22,10 +22,9 @@ pub trait ServerLogic: Send + Sync {
         + Debug;
     type AccountId: Copy + Hash + Eq + Send + Sync;
 
-    // TODO Make ConnectedClient an opaque type
     async fn handle_request(
         &self,
-        client: &ConnectedClient<Self::Response, Self::Account>,
+        client: &ConnectedClient<Self>,
         request: Self::Request,
         server: &Server<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
@@ -48,12 +47,12 @@ pub trait ServerLogic: Send + Sync {
         account: Option<Handle<Self::Account>>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
 
-    async fn handle_websocket_error(&self, _err: warp::Error) -> ErrorHandling {
-        ErrorHandling::Disconnect
-    }
-
     async fn new_installation_connected(
         &self,
         installation_id: Uuid,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
+
+    async fn handle_websocket_error(&self, _err: warp::Error) -> ErrorHandling {
+        ErrorHandling::Disconnect
+    }
 }

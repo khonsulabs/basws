@@ -62,7 +62,7 @@ impl ServerLogic for ChatServer {
 
     async fn handle_request(
         &self,
-        client: &ConnectedClient<Self::Response, Self::Account>,
+        client: &ConnectedClient<Self>,
         request: Self::Request,
         server: &Server<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {

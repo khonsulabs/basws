@@ -80,7 +80,6 @@ pub enum ServerResponse<T> {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ServerError {
     IncompatibleVersion,
-    Other(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]

@@ -45,22 +45,22 @@ where
     L: ServerLogic + ?Sized,
 {
     logic: Box<L>,
-    clients: RwLock<ClientData<L::Response, L::Account>>,
+    clients: RwLock<ClientData<L>>,
     accounts_by_id: AccountMap<L::Account>,
 }
 
-struct ClientData<Response, TAccount>
+struct ClientData<L>
 where
-    TAccount: Identifiable,
+    L: ServerLogic + ?Sized,
 {
-    clients: HashMap<Uuid, ConnectedClient<Response, TAccount>>,
-    installations_by_account: HashMap<TAccount::Id, HashSet<Uuid>>,
-    account_by_installation: HashMap<Uuid, TAccount::Id>,
+    clients: HashMap<Uuid, ConnectedClient<L>>,
+    installations_by_account: HashMap<L::AccountId, HashSet<Uuid>>,
+    account_by_installation: HashMap<Uuid, L::AccountId>,
 }
 
-impl<Response, TAccount> Default for ClientData<Response, TAccount>
+impl<L> Default for ClientData<L>
 where
-    TAccount: Identifiable,
+    L: ServerLogic,
 {
     fn default() -> Self {
         Self {
@@ -208,7 +208,7 @@ where
         self.data.logic.handle_websocket_error(error).await
     }
 
-    async fn disconnect(&self, client: ConnectedClient<L::Response, L::Account>) {
+    async fn disconnect(&self, client: ConnectedClient<L>) {
         if let Some(installation) = client.installation().await {
             let mut data = self.data.clients.write().await;
 
@@ -238,7 +238,7 @@ where
 
     async fn handle_request(
         &self,
-        client_handle: &ConnectedClient<L::Response, L::Account>,
+        client_handle: &ConnectedClient<L>,
         ws_request: WsRequest<L::Request>,
     ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
         match ws_request.request {
@@ -374,11 +374,7 @@ where
         }
     }
 
-    async fn connect(
-        &self,
-        installation: InstallationConfig,
-        client: &ConnectedClient<L::Response, L::Account>,
-    ) {
+    async fn connect(&self, installation: InstallationConfig, client: &ConnectedClient<L>) {
         let mut data = self.data.clients.write().await;
         data.clients.insert(installation.id, client.clone());
         {
@@ -521,7 +517,7 @@ mod tests {
 
         async fn handle_request(
             &self,
-            _client: &ConnectedClient<Self::Response, Self::Account>,
+            _client: &ConnectedClient<Self>,
             _request: Self::Request,
             _server: &Server<Self>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
