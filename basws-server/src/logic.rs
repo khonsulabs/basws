@@ -14,12 +14,8 @@ pub trait Identifiable {
 pub trait ServerLogic: Send + Sync {
     type Request: Serialize + DeserializeOwned + Clone + Send + Sync + Debug;
     type Response: Serialize + DeserializeOwned + Clone + Send + Sync + Debug;
-    type Account: Identifiable<Id = Self::AccountId>
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + Debug;
+    type Client: Send + Sync + Debug;
+    type Account: Identifiable<Id = Self::AccountId> + Send + Sync + Debug;
     type AccountId: Copy + Hash + Eq + Send + Sync;
 
     async fn handle_request(

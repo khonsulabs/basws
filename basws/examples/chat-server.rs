@@ -57,6 +57,7 @@ impl Identifiable for Account {
 impl ServerLogic for ChatServer {
     type Request = ChatRequest;
     type Response = ChatResponse;
+    type Client = ();
     type Account = Account;
     type AccountId = i64;
 

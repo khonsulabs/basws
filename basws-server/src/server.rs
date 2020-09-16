@@ -95,7 +95,7 @@ where
         }
     }
 
-    pub async fn incoming_connection(&self, ws: warp::ws::WebSocket) {
+    pub async fn incoming_connection_for_client(&self, ws: warp::ws::WebSocket, client: L::Client) {
         let (mut tx, mut rx) = ws.split();
 
         let (sender, transmission_receiver) =
@@ -109,7 +109,7 @@ where
             }
         });
 
-        let client = ConnectedClient::new(sender.clone());
+        let client = ConnectedClient::new(client, sender.clone());
         while let Some(result) = rx.next().await {
             match result {
                 Ok(message) => {
@@ -407,6 +407,17 @@ where
     }
 }
 
+impl<L> Server<L>
+where
+    L: ServerLogic + 'static,
+    L::Client: Default,
+{
+    pub async fn incoming_connection(&self, ws: warp::ws::WebSocket) {
+        self.incoming_connection_for_client(ws, Default::default())
+            .await
+    }
+}
+
 pub enum ErrorHandling {
     Disconnect,
     StayConnected,
@@ -512,6 +523,7 @@ mod tests {
     impl ServerLogic for TestServer {
         type Request = ();
         type Response = ();
+        type Client = ();
         type Account = TestAccount;
         type AccountId = i64;
 
@@ -569,11 +581,11 @@ mod tests {
         let installation_no_account = InstallationConfig::default();
         let (sender, _) = async_channel::unbounded();
         let client_no_account =
-            ConnectedClient::new_with_installation(installation_no_account, sender);
+            ConnectedClient::new_with_installation(Some(installation_no_account), (), sender);
         let installation_has_account = InstallationConfig::default();
         let (sender, _) = async_channel::unbounded();
         let client_has_account =
-            ConnectedClient::new_with_installation(installation_has_account, sender);
+            ConnectedClient::new_with_installation(Some(installation_has_account), (), sender);
 
         let server = Server::new(TestServer {
             logged_in_installations: hashmap! {

@@ -28,6 +28,7 @@ struct ConnectedClientData<L>
 where
     L: ServerLogic + ?Sized,
 {
+    client: Handle<L::Client>,
     pub installation: Option<InstallationConfig>,
     pub(crate) nonce: Option<[u8; 32]>,
     sender: Sender<WsBatchResponse<L::Response>>,
@@ -39,28 +40,22 @@ impl<L> ConnectedClient<L>
 where
     L: ServerLogic + 'static,
 {
-    pub fn new(sender: Sender<WsBatchResponse<L::Response>>) -> Self {
-        Self {
-            data: Handle::new(ConnectedClientData {
-                sender,
-                nonce: None,
-                account: None,
-                installation: None,
-                network_timing: Default::default(),
-            }),
-        }
+    pub(crate) fn new(client: L::Client, sender: Sender<WsBatchResponse<L::Response>>) -> Self {
+        Self::new_with_installation(None, client, sender)
     }
 
-    pub fn new_with_installation(
-        installation: InstallationConfig,
+    pub(crate) fn new_with_installation(
+        installation: Option<InstallationConfig>,
+        client: L::Client,
         sender: Sender<WsBatchResponse<L::Response>>,
     ) -> Self {
         Self {
             data: Handle::new(ConnectedClientData {
                 sender,
+                client: Handle::new(client),
                 nonce: None,
                 account: None,
-                installation: Some(installation),
+                installation,
                 network_timing: Default::default(),
             }),
         }
@@ -79,6 +74,11 @@ where
     pub async fn set_installation(&self, installation: InstallationConfig) {
         let mut data = self.data.write().await;
         data.installation = Some(installation);
+    }
+
+    pub async fn client(&self) -> Handle<L::Client> {
+        let data = self.data.read().await;
+        data.client.clone()
     }
 
     pub async fn account(&self) -> Option<Handle<L::Account>> {
