@@ -1,5 +1,7 @@
 # basws-client
 
+[![crate version](https://img.shields.io/crates/v/basws-client.svg)](https://crates.io/crates/basws-client)
+
 basws-client is a simple WebSocket framework. For more information, see the [basws README](../README.md).
 
 To set up your own protocol client:

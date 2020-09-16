@@ -1,5 +1,7 @@
 # basws
 
+[![crate version](https://img.shields.io/crates/v/basws.svg)](https://crates.io/crates/basws)
+
 basws is a simple framework that aims to simplify the amount of code required to build an interactive WebSocket API.
 
 basws is built atop [warp](https://github.com/seanmonstar/warp) on the server, and [tokio-tungstenite](https://github.com/snapview/tokio-tungstenite) on the client. Both crates utilize the [tokio](https://tokio.rs/) runtime.

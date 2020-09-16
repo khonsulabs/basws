@@ -1,5 +1,7 @@
 # basws-server
 
+[![crate version](https://img.shields.io/crates/v/basws-server.svg)](https://crates.io/crates/basws-server)
+
 basws-server is a simple WebSocket framework. For more information, see the [basws README](../README.md).
 
 To set up your own protocol server:
