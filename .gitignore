@@ -2,3 +2,4 @@
 .vscode/
 /client*.json
 *.sleddb
+Cargo.lock
