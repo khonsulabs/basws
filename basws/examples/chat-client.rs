@@ -2,11 +2,8 @@
 extern crate log;
 
 use basws::{
-    client::{async_trait, Client, ClientLogic, LoginState, Url},
-    shared::{
-        protocol::{InstallationConfig, ServerError},
-        Version,
-    },
+    client::{async_trait, Client, ClientLogic, Error, LoginState, Url},
+    shared::{protocol::InstallationConfig, Version},
 };
 pub mod shared;
 use basws_shared::protocol::ServerRequest;
@@ -122,11 +119,7 @@ impl ClientLogic for ChatClient {
         Ok(())
     }
 
-    async fn handle_server_error(
-        &self,
-        error: ServerError,
-        _client: Client<Self>,
-    ) -> anyhow::Result<()> {
+    async fn handle_error(&self, error: Error, _client: Client<Self>) -> anyhow::Result<()> {
         error!("Error from server: {:?}", error);
         Ok(())
     }

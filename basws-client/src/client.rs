@@ -1,11 +1,14 @@
-use crate::{logic::ClientLogic, login_state::LoginState};
+use crate::{
+    logic::{ClientLogic, Error},
+    login_state::LoginState,
+};
 use async_channel::Receiver;
 use async_handle::Handle;
 use basws_shared::{
     challenge,
     protocol::{
-        protocol_version, InstallationConfig, ServerError, ServerRequest, ServerResponse,
-        WsBatchResponse, WsRequest,
+        protocol_version, InstallationConfig, ServerRequest, ServerResponse, WsBatchResponse,
+        WsRequest,
     },
     timing::current_timestamp,
     Version,
@@ -120,10 +123,10 @@ where
             .await
     }
 
-    async fn handle_error(&self, error: ServerError) -> anyhow::Result<()> {
+    async fn handle_error(&self, error: Error) -> anyhow::Result<()> {
         let client = self.clone();
         let data = self.data.read().await;
-        data.logic.handle_server_error(error, client).await
+        data.logic.handle_error(error, client).await
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
@@ -137,8 +140,7 @@ where
                     None
                 }
                 Err(err) => {
-                    // TODO report this to the client logic instead of printing it
-                    println!("Error connecting to server: {:?}", err);
+                    self.handle_error(Error::Websocket(err)).await?;
                     Some(tokio::time::Duration::from_millis(500))
                 }
             };
@@ -161,9 +163,7 @@ where
                     match serde_cbor::from_slice::<WsBatchResponse<L::Response>>(&bytes) {
                         Ok(response) => self.handle_batch_response(response).await?,
                         Err(error) => {
-                            // TODO should this be reported, or is ignoring correct?
-                            // println is definitely not correct.
-                            println!("Error deserializing message. {:?}", error)
+                            self.handle_error(Error::Cbor(error)).await?;
                         }
                     }
                 }
@@ -217,7 +217,7 @@ where
                     })
                     .await?;
                 }
-                ServerResponse::Error(error) => self.handle_error(error).await?,
+                ServerResponse::Error(error) => self.handle_error(Error::Server(error)).await?,
                 ServerResponse::Response(response) => {
                     self.response_received(response, batch.request_id).await?
                 }

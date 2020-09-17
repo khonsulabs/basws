@@ -8,6 +8,13 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;
 use url::Url;
 
+#[derive(Debug)]
+pub enum Error {
+    Server(ServerError),
+    Cbor(serde_cbor::Error),
+    Websocket(tokio_tungstenite::tungstenite::Error),
+}
+
 #[async_trait]
 pub trait ClientLogic: Send + Sync {
     type Request: Serialize + DeserializeOwned + Sync + Send + Clone + Debug;
@@ -27,9 +34,5 @@ pub trait ClientLogic: Send + Sync {
         client: Client<Self>,
     ) -> anyhow::Result<()>;
 
-    async fn handle_server_error(
-        &self,
-        error: ServerError,
-        client: Client<Self>,
-    ) -> anyhow::Result<()>;
+    async fn handle_error(&self, error: Error, client: Client<Self>) -> anyhow::Result<()>;
 }
