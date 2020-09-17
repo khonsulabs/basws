@@ -2,12 +2,16 @@
 extern crate log;
 use basws::{
     server::{
-        async_trait, ConnectedClient, Handle, Identifiable, RequestHandling, Server, ServerLogic,
+        async_trait,
+        persistent::{
+            PersistentConnectedClient, PersistentServer, PersistentServerHandle,
+            PersistentServerLogic,
+        },
+        Handle, Identifiable, RequestHandling,
     },
-    shared::{protocol::InstallationConfig, Uuid, VersionReq},
+    shared::{Uuid, VersionReq},
 };
 use serde_derive::{Deserialize, Serialize};
-use std::collections::HashMap;
 use warp::Filter;
 
 pub mod shared;
@@ -18,7 +22,7 @@ use shared::chat::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
-    let server = Server::new(ChatServer::default());
+    let server = PersistentServer::new(ChatServer, &std::path::PathBuf::from("server.sleddb"))?;
 
     let routes = warp::path("ws")
         .and(warp::ws())
@@ -32,63 +36,65 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Default)]
-struct ChatServer {
-    accounts: Handle<HashMap<i64, Handle<Account>>>,
-    screennames: Handle<HashMap<String, i64>>,
-    installations: Handle<HashMap<Uuid, InstallationConfig>>,
-    installation_accounts: Handle<HashMap<Uuid, i64>>,
-}
+struct ChatServer;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Account {
-    id: i64,
+    id: Uuid,
     username: String,
 }
 
 impl Identifiable for Account {
-    type Id = i64;
+    type Id = Uuid;
     fn id(&self) -> Self::Id {
         self.id
     }
 }
 
 #[async_trait]
-impl ServerLogic for ChatServer {
+impl PersistentServerLogic for ChatServer {
     type Request = ChatRequest;
     type Response = ChatResponse;
     type Client = ();
     type Account = Account;
-    type AccountId = i64;
+
+    async fn initialize_client_for(
+        &self,
+        _client: &PersistentConnectedClient<Self>,
+    ) -> anyhow::Result<Self::Client> {
+        Ok(())
+    }
 
     async fn handle_request(
         &self,
-        client: &ConnectedClient<Self>,
+        client: &PersistentConnectedClient<Self>,
         request: Self::Request,
-        server: &Server<Self>,
+        server: &PersistentServerHandle<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         match request {
             ChatRequest::Login { username } => {
                 info!("Received login request: {}", username);
                 let installation = client.installation().await.unwrap();
-                let mut screennames = self.screennames.write().await;
-                let account = if let Some(&account_id) = screennames.get(&username) {
-                    let accounts = self.accounts.read().await;
-                    accounts
-                        .get(&account_id)
+                let lower_username = username.to_lowercase();
+                let account = if let Some(account_id) = server
+                    .load::<Uuid>(b"usernames", lower_username.as_bytes())
+                    .await?
+                {
+                    server
+                        .load_account(account_id)
+                        .await?
                         .expect("Screennames contained an account_id that couldn't be found")
-                        .clone()
                 } else {
                     // New username
-                    let mut accounts = self.accounts.write().await;
-                    let id = accounts.len() as i64;
                     let account = Account {
-                        id,
+                        id: Uuid::new_v4(),
                         username: username.clone(),
                     };
+                    server
+                        .save(b"usernames", lower_username.as_bytes(), &account.id)
+                        .await?;
                     let account = Handle::new(account);
-                    accounts.insert(id, account.clone());
-                    screennames.insert(username.clone(), id);
+                    server.save_account(&account).await?;
                     account
                 };
 
@@ -121,47 +127,13 @@ impl ServerLogic for ChatServer {
         }
     }
 
-    async fn lookup_account_from_installation_id(
-        &self,
-        installation_id: Uuid,
-    ) -> anyhow::Result<Option<Handle<Self::Account>>> {
-        trace!("Looking up account: {}", installation_id);
-        let installation_accounts = self.installation_accounts.read().await;
-
-        let account = if let Some(account_id) = installation_accounts.get(&installation_id) {
-            let accounts = self.accounts.read().await;
-            accounts.get(account_id).cloned()
-        } else {
-            None
-        };
-
-        Ok(account)
-    }
-
     fn protocol_version_requirements(&self) -> VersionReq {
         protocol_version_requirements()
     }
 
-    async fn lookup_or_create_installation(
-        &self,
-        _client: &ConnectedClient<Self>,
-        installation_id: Option<Uuid>,
-    ) -> anyhow::Result<InstallationConfig> {
-        let mut installations = self.installations.write().await;
-        if let Some(installation_id) = installation_id {
-            if let Some(installation) = installations.get(&installation_id) {
-                return Ok(*installation);
-            }
-        }
-
-        let config = InstallationConfig::default();
-        installations.insert(config.id, config);
-        Ok(config)
-    }
-
     async fn client_reconnected(
         &self,
-        client: &ConnectedClient<Self>,
+        client: &PersistentConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         let installation_id = client.installation().await.unwrap().id;
         if let Some(account) = client.account().await {
@@ -184,7 +156,7 @@ impl ServerLogic for ChatServer {
 
     async fn new_client_connected(
         &self,
-        client: &ConnectedClient<Self>,
+        client: &PersistentConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>> {
         info!(
             "New client connected: {}",

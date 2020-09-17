@@ -1,2 +1,5 @@
 [workspace]
 members = ["basws-shared", "basws-server", "basws-client", "basws"]
+
+[patch.crates-io]
+async-handle = { path = "../async-handle", version = "0.1" }

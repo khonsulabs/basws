@@ -34,19 +34,23 @@ pub trait ServerLogic: Send + Sync {
 
     async fn lookup_or_create_installation(
         &self,
+        client: &ConnectedClient<Self>,
         installation_id: Option<Uuid>,
     ) -> anyhow::Result<InstallationConfig>;
 
     async fn client_reconnected(
         &self,
-        installation_id: Uuid,
-        account: Option<Handle<Self::Account>>,
+        client: &ConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
 
-    async fn new_installation_connected(
+    async fn new_client_connected(
         &self,
-        installation_id: Uuid,
+        client: &ConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
+
+    async fn account_associated(&self, _client: &ConnectedClient<Self>) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     async fn handle_websocket_error(&self, _err: warp::Error) -> ErrorHandling {
         ErrorHandling::Disconnect

@@ -44,7 +44,7 @@ struct ServerData<L>
 where
     L: ServerLogic + ?Sized,
 {
-    logic: Box<L>,
+    logic: Arc<Box<L>>,
     clients: RwLock<ClientData<L>>,
     accounts_by_id: AccountMap<L::Account>,
 }
@@ -88,11 +88,15 @@ where
     pub fn new(logic: L) -> Self {
         Self {
             data: Arc::new(ServerData {
-                logic: Box::new(logic),
+                logic: Arc::new(Box::new(logic)),
                 clients: Default::default(),
                 accounts_by_id: Default::default(),
             }),
         }
+    }
+
+    pub fn logic(&self) -> &'_ L {
+        &self.data.logic
     }
 
     pub async fn incoming_connection_for_client(&self, ws: warp::ws::WebSocket, client: L::Client) {
@@ -125,15 +129,13 @@ where
                                     }
                                 }
                                 Err(err) => {
-                                    // TODO switch to logging
-                                    println!("Error handling message. Disconnecting. {:?}", err);
+                                    error!("Error handling message. Disconnecting. {:?}", err);
                                     break;
                                 }
                             }
                         }
                         Err(cbor_error) => {
-                            // TODO switch to logging
-                            println!("Error decoding cbor {:?}", cbor_error);
+                            error!("Error decoding cbor {:?}", cbor_error);
                             break;
                         }
                     }
@@ -184,11 +186,8 @@ where
         &self,
         installation_id: Uuid,
         account: Handle<L::Account>,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut data = self.data.clients.write().await;
-        if let Some(client) = data.clients.get_mut(&installation_id) {
-            client.set_account(account.clone()).await;
-        }
 
         let account_id = {
             let account = account.read().await;
@@ -202,6 +201,13 @@ where
             .entry(account_id)
             .or_insert_with(HashSet::new);
         installations.insert(installation_id);
+
+        if let Some(client) = data.clients.get_mut(&installation_id) {
+            client.set_account(account.clone()).await;
+            self.data.logic.account_associated(client).await?
+        }
+
+        Ok(())
     }
 
     async fn websocket_error(&self, error: warp::Error) -> ErrorHandling {
@@ -260,7 +266,7 @@ where
                 let config = self
                     .data
                     .logic
-                    .lookup_or_create_installation(installation_id)
+                    .lookup_or_create_installation(client_handle, installation_id)
                     .await?;
 
                 if let Some(installation_id) = installation_id {
@@ -283,7 +289,7 @@ where
                 let new_installation_response = self
                     .data
                     .logic
-                    .new_installation_connected(config.id)
+                    .new_client_connected(client_handle)
                     .await?
                     .into_server_handling();
 
@@ -319,18 +325,12 @@ where
 
                     if let Some(profile) = &profile {
                         self.associate_installation_with_account(installation.id, profile.clone())
-                            .await;
+                            .await?;
                     }
 
-                    self.data
-                        .logic
-                        .client_reconnected(installation.id, profile)
-                        .await?
+                    self.data.logic.client_reconnected(client_handle).await?
                 } else {
-                    self.data
-                        .logic
-                        .new_installation_connected(installation.id)
-                        .await?
+                    self.data.logic.new_client_connected(client_handle).await?
                 };
                 Ok(ServerRequestHandling::Respond(ServerResponse::Connected {
                     installation_id: installation.id,
@@ -555,6 +555,7 @@ mod tests {
 
         async fn lookup_or_create_installation(
             &self,
+            _client: &ConnectedClient<Self>,
             _installation_id: Option<Uuid>,
         ) -> anyhow::Result<InstallationConfig> {
             unimplemented!()
@@ -562,15 +563,14 @@ mod tests {
 
         async fn client_reconnected(
             &self,
-            _installation_id: Uuid,
-            _account: Option<Handle<Self::Account>>,
+            _client: &ConnectedClient<Self>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             unimplemented!()
         }
 
-        async fn new_installation_connected(
+        async fn new_client_connected(
             &self,
-            _installation_id: Uuid,
+            _client: &ConnectedClient<Self>,
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             unimplemented!()
         }
@@ -630,7 +630,7 @@ mod tests {
             .unwrap();
         server
             .associate_installation_with_account(installation_has_account.id, account)
-            .await;
+            .await?;
 
         {
             let data = server.data.clients.read().await;
@@ -667,5 +667,16 @@ mod tests {
         }
 
         Ok(())
+    }
+}
+
+impl<L> std::ops::Deref for Server<L>
+where
+    L: ServerLogic + 'static,
+{
+    type Target = L;
+
+    fn deref(&self) -> &'_ Self::Target {
+        self.logic()
     }
 }

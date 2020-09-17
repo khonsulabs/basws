@@ -1,7 +1,14 @@
+#[macro_use]
+extern crate log;
+
 mod connected_client;
 mod logic;
 mod server;
 pub use basws_shared as shared;
+
+#[cfg(feature = "persistent-server")]
+/// A server implementation with disk persistence built-in. **Requires feature `persistent-server`**
+pub mod persistent;
 
 #[cfg(test)]
 #[macro_use]

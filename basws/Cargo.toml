@@ -18,6 +18,7 @@ repository = "https://github.com/khonsulabs/basws"
 default = []
 server = ["basws-server"]
 client = ["basws-client"]
+persistent-server = ["basws-server/persistent-server"]
 
 [dependencies]
 basws-shared = { path = "../basws-shared", version = "0.1.0-dev-3" }
@@ -34,6 +35,10 @@ tokio = { version = "0.2", features = ["full"] }
 rand = "0.7"
 log = "0.4"
 pretty_env_logger = "0.4"
+
+[[example]]
+name = "persistent-chat-server"
+required-features = ["basws-server", "persistent-server"]
 
 [[example]]
 name = "chat-server"
