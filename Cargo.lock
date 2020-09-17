@@ -103,7 +103,7 @@ checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
 
 [[package]]
 name = "basws"
-version = "0.1.0-dev-2"
+version = "0.1.0-dev-3"
 dependencies = [
  "anyhow",
  "basws-client",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "basws-client"
-version = "0.1.0-dev-2"
+version = "0.1.0-dev-3"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "basws-server"
-version = "0.1.0-dev-2"
+version = "0.1.0-dev-3"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "basws-shared"
-version = "0.1.0-dev-2"
+version = "0.1.0-dev-3"
 dependencies = [
  "chrono",
  "rand 0.7.3",
