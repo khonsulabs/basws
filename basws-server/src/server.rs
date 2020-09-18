@@ -1,4 +1,5 @@
 use crate::{connected_client::ConnectedClient, Identifiable, ServerLogic};
+use async_channel::Sender;
 use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
@@ -10,7 +11,7 @@ use basws_shared::{
     },
     Uuid, Version,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{stream::SplitStream, SinkExt, StreamExt};
 use std::{collections::HashMap, collections::HashSet, sync::Arc};
 use warp::ws::Message;
 
@@ -100,7 +101,7 @@ where
     }
 
     pub async fn incoming_connection_for_client(&self, ws: warp::ws::WebSocket, client: L::Client) {
-        let (mut tx, mut rx) = ws.split();
+        let (mut tx, rx) = ws.split();
 
         let (sender, transmission_receiver) =
             async_channel::unbounded::<WsBatchResponse<L::Response>>();
@@ -114,6 +115,18 @@ where
         });
 
         let client = ConnectedClient::new(client, sender.clone());
+        let _ = tokio::try_join!(
+            client.ping_loop(),
+            self.receive_loop(client.clone(), rx, sender)
+        );
+    }
+
+    async fn receive_loop(
+        &self,
+        client: ConnectedClient<L>,
+        mut rx: SplitStream<warp::ws::WebSocket>,
+        sender: Sender<WsBatchResponse<L::Response>>,
+    ) -> anyhow::Result<()> {
         while let Some(result) = rx.next().await {
             match result {
                 Ok(message) => {
@@ -149,6 +162,9 @@ where
         }
 
         self.disconnect(client).await;
+
+        // For try_join to exit early, we need to return an Err, even though everything is "fine"
+        anyhow::bail!("Disconnected")
     }
 
     pub async fn broadcast(&self, response: L::Response) {

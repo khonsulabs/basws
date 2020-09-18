@@ -17,3 +17,17 @@ extern crate futures_await_test;
 pub use crate::{connected_client::ConnectedClient, logic::*, server::*};
 pub use async_handle::Handle;
 pub use async_trait::async_trait;
+
+mod common_prelude {
+    pub use crate::{
+        logic::{Identifiable, ServerLogic},
+        server::{ErrorHandling, RequestHandling},
+    };
+    pub use async_handle::Handle;
+    pub use async_trait::async_trait;
+    pub use basws_shared::prelude::*;
+}
+
+pub mod prelude {
+    pub use crate::{common_prelude::*, connected_client::ConnectedClient, server::*};
+}

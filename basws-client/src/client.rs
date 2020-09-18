@@ -4,6 +4,7 @@ use crate::{
 };
 use async_channel::Receiver;
 use async_handle::Handle;
+use async_rwlock::RwLock;
 use basws_shared::{
     challenge,
     protocol::{
@@ -14,18 +15,22 @@ use basws_shared::{
     Version,
 };
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
+use once_cell::sync::OnceCell;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url::Url;
 
 mod data;
-use data::ClientData;
+use data::{ClientData, NetworkState};
+
+static REQUEST_COUNTER: OnceCell<Handle<u64>> = OnceCell::new();
 
 pub struct Client<L>
 where
     L: ClientLogic + ?Sized,
 {
-    data: Handle<ClientData<L>>,
+    data: Arc<ClientData<L>>,
 }
 
 impl<L> Clone for Client<L>
@@ -39,6 +44,17 @@ where
     }
 }
 
+impl<L> std::ops::Deref for Client<L>
+where
+    L: ClientLogic,
+{
+    type Target = L;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data.logic
+    }
+}
+
 impl<L> Client<L>
 where
     L: ClientLogic + 'static,
@@ -46,13 +62,15 @@ where
     pub fn new(logic: L) -> Self {
         let (sender, receiver) = async_channel::unbounded();
         Self {
-            data: Handle::new(ClientData {
+            data: Arc::new(ClientData {
                 logic: Box::new(logic),
-                login_state: LoginState::Disconnected,
                 sender,
                 receiver,
-                average_roundtrip: 0.0,
-                average_server_timestamp_delta: 0.0,
+                state: RwLock::new(NetworkState {
+                    login_state: LoginState::Disconnected,
+                    average_roundtrip: None,
+                    average_server_timestamp_delta: None,
+                }),
             }),
         }
     }
@@ -63,52 +81,47 @@ where
 
     async fn set_login_state(&self, state: LoginState) -> anyhow::Result<()> {
         let client = self.clone();
-        let mut network = self.data.write().await;
+        let mut network = self.data.state.write().await;
         network.login_state = state;
-        network
+        self.data
             .logic
             .state_changed(&network.login_state, client)
             .await
     }
 
     pub async fn login_state(&self) -> LoginState {
-        let network = self.data.read().await;
+        let network = self.data.state.read().await;
         network.login_state.clone()
     }
 
     async fn receiver(&self) -> Receiver<WsRequest<L::Request>> {
-        let network = self.data.read().await;
-        network.receiver.clone()
+        self.data.receiver.clone()
     }
 
-    pub async fn average_roundtrip(&self) -> f64 {
-        let network = self.data.read().await;
+    pub async fn average_roundtrip(&self) -> Option<f64> {
+        let network = self.data.state.read().await;
         network.average_roundtrip
     }
 
-    pub async fn average_server_timestamp_delta(&self) -> f64 {
-        let network = self.data.read().await;
+    pub async fn average_server_timestamp_delta(&self) -> Option<f64> {
+        let network = self.data.state.read().await;
         network.average_server_timestamp_delta
     }
 
     async fn server_url(&self) -> Url {
-        let data = self.data.read().await;
-        data.logic.server_url()
+        self.data.logic.server_url()
     }
 
     async fn protocol_version(&self) -> Version {
-        let data = self.data.read().await;
-        data.logic.protocol_version()
+        self.data.logic.protocol_version()
     }
 
     async fn stored_installation_config(&self) -> Option<InstallationConfig> {
-        let data = self.data.read().await;
-        data.logic.stored_installation_config().await
+        self.data.logic.stored_installation_config().await
     }
 
     async fn store_installation_config(&self, config: InstallationConfig) -> anyhow::Result<()> {
-        let data = self.data.read().await;
-        data.logic.store_installation_config(config).await
+        self.data.logic.store_installation_config(config).await
     }
 
     async fn response_received(
@@ -117,16 +130,15 @@ where
         original_request_id: Option<u64>,
     ) -> anyhow::Result<()> {
         let client = self.clone();
-        let data = self.data.read().await;
-        data.logic
+        self.data
+            .logic
             .response_received(response, original_request_id, client)
             .await
     }
 
     async fn handle_error(&self, error: Error) -> anyhow::Result<()> {
         let client = self.clone();
-        let data = self.data.read().await;
-        data.logic.handle_error(error, client).await
+        self.data.logic.handle_error(error, client).await
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
@@ -208,10 +220,10 @@ where
                     average_server_timestamp_delta,
                     timestamp,
                 } => {
-                    let mut data = self.data.write().await;
+                    let mut data = self.data.state.write().await;
                     data.average_roundtrip = average_roundtrip;
                     data.average_server_timestamp_delta = average_server_timestamp_delta;
-                    data.send(ServerRequest::Pong {
+                    self.request(ServerRequest::Pong {
                         original_timestamp: timestamp,
                         timestamp: current_timestamp(),
                     })
@@ -228,8 +240,12 @@ where
     }
 
     pub async fn request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
-        let data = self.data.read().await;
-        data.send(request).await?;
+        let id = {
+            let mut counter = REQUEST_COUNTER.get_or_init(|| Handle::new(0)).write().await;
+            *counter = counter.wrapping_add(1);
+            *counter
+        };
+        self.data.sender.send(WsRequest { id, request }).await?;
         Ok(())
     }
 

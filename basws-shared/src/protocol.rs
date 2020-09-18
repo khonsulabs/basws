@@ -63,8 +63,8 @@ pub enum ServerRequest<T> {
 pub enum ServerResponse<T> {
     Ping {
         timestamp: f64,
-        average_roundtrip: f64,
-        average_server_timestamp_delta: f64,
+        average_roundtrip: Option<f64>,
+        average_server_timestamp_delta: Option<f64>,
     },
     NewInstallation(InstallationConfig),
     Challenge {

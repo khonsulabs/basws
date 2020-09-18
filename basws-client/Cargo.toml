@@ -19,6 +19,7 @@ tokio-tungstenite = "0.11"
 tokio = { version = "0.2", features = ["time", "macros"] }
 async-handle = "0.1"
 async-channel = "1"
+async-rwlock = "1"
 basws-shared = { path = "../basws-shared", version = "0.1.0-dev-4" }
 async-trait = "0.1"
 serde = "1"

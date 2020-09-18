@@ -2,7 +2,9 @@ use crate::logic::ServerLogic;
 use async_channel::Sender;
 use async_handle::Handle;
 use basws_shared::{
+    protocol::ServerResponse,
     protocol::{InstallationConfig, WsBatchResponse},
+    timing::current_timestamp,
     timing::NetworkTiming,
 };
 
@@ -104,5 +106,29 @@ where
     pub(crate) async fn update_network_timing(&self, original_timestamp: f64, timestamp: f64) {
         let mut data = self.data.write().await;
         data.network_timing.update(original_timestamp, timestamp)
+    }
+
+    // TODO: Ping duration should be configurable
+    pub(crate) async fn ping_loop(&self) -> anyhow::Result<()> {
+        loop {
+            let ping = {
+                let data = self.data.read().await;
+                ServerResponse::Ping {
+                    average_roundtrip: data.network_timing.average_roundtrip,
+                    average_server_timestamp_delta: data
+                        .network_timing
+                        .average_server_timestamp_delta,
+                    timestamp: current_timestamp(),
+                }
+            };
+
+            self.send(WsBatchResponse {
+                request_id: None,
+                results: vec![ping],
+            })
+            .await?;
+
+            tokio::time::delay_for(tokio::time::Duration::from_secs_f32(1.)).await
+        }
     }
 }

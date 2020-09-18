@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+
 use basws::{
     server::{
         async_trait,

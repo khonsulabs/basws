@@ -3,3 +3,8 @@ pub mod protocol;
 pub mod timing;
 pub use semver::{Version, VersionReq};
 pub use uuid::Uuid;
+
+pub mod prelude {
+    pub use semver::{Version, VersionReq};
+    pub use uuid::Uuid;
+}

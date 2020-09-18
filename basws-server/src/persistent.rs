@@ -47,7 +47,7 @@ where L: PersistentServerLogic {
 
 impl<L> PersistentServer<L>
 where L: PersistentServerLogic {
-    pub fn new(logic: L, database_path: &std::path::Path) -> Result<PersistentServerHandle<L>, sled::Error> {
+    pub fn new<P: AsRef<std::path::Path>>(logic: L, database_path: P) -> Result<PersistentServerHandle<L>, sled::Error> {
         let database = sled::open(database_path)?;
         Ok(Server::new(Self { logic: Box::new(logic), database, connected_clients: Default::default() }))
     }
@@ -225,4 +225,9 @@ where L: PersistentServerLogic + ?Sized + 'static {
     async fn save_installation_account_id(&self, uuid: Uuid, account_id: Uuid) -> anyhow::Result<()> {
         self.save(b"installation_accounts", uuid.as_bytes(), &account_id).await
     }
+}
+
+pub mod prelude {
+    pub use crate::{common_prelude::*, persistent::*};
+    pub use basws_shared::prelude::*;
 }
