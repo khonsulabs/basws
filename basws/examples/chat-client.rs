@@ -6,7 +6,6 @@ use basws::{
     shared::{protocol::InstallationConfig, Version},
 };
 pub mod shared;
-use basws_shared::protocol::ServerRequest;
 use rand::{seq::SliceRandom, thread_rng, Rng};
 use shared::chat::{protocol_version, ChatRequest, ChatResponse, SERVER_PORT};
 use std::{fs, path::PathBuf};
@@ -39,9 +38,7 @@ async fn random_chat_loop(client: Client<ChatClient>) {
                     .unwrap()
                     .to_string()
             };
-            let _ = client
-                .request(ServerRequest::Request(ChatRequest::Chat { message }))
-                .await;
+            let _ = client.request(ChatRequest::Chat { message }).await;
         }
         let sleep_time = {
             let mut rng = thread_rng();
@@ -106,9 +103,9 @@ impl ClientLogic for ChatClient {
                 };
 
                 client
-                    .request(ServerRequest::Request(ChatRequest::Login {
+                    .request(ChatRequest::Login {
                         username: name.to_string(),
-                    }))
+                    })
                     .await?;
             }
             ChatResponse::LoggedIn { username } => {

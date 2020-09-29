@@ -1,6 +1,7 @@
 use crate::challenge;
 use semver::{Version, VersionReq};
 use serde_derive::{Deserialize, Serialize};
+use std::convert::TryInto;
 use uuid::Uuid;
 
 pub fn protocol_version() -> Version {
@@ -95,4 +96,23 @@ impl Default for InstallationConfig {
             private_key: challenge::nonce(),
         }
     }
+}
+
+impl InstallationConfig {
+    pub fn from_vec(id: Uuid, private_key: Vec<u8>) -> Result<Self, InstallationConfigError> {
+        let slice = private_key.into_boxed_slice();
+        let private_key: Box<[u8; 32]> = slice
+            .try_into()
+            .map_err(|_| InstallationConfigError::InvalidPrivateKey)?;
+        Ok(Self {
+            id,
+            private_key: *private_key,
+        })
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum InstallationConfigError {
+    #[error("invalid private key (must be 32 bytes long)")]
+    InvalidPrivateKey,
 }

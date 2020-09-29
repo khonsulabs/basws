@@ -5,6 +5,7 @@ pub use semver::{Version, VersionReq};
 pub use uuid::Uuid;
 
 pub mod prelude {
+    pub use crate::protocol::{InstallationConfig, ServerError};
     pub use semver::{Version, VersionReq};
     pub use uuid::Uuid;
 }

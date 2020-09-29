@@ -210,7 +210,7 @@ where
                         anyhow::anyhow!("Server issued challenge, but client has no stored config")
                     })?;
 
-                    self.request(ServerRequest::ChallengeResponse(
+                    self.server_request(ServerRequest::ChallengeResponse(
                         challenge::compute_challenge(&config.private_key, &nonce),
                     ))
                     .await?
@@ -223,7 +223,7 @@ where
                     let mut data = self.data.state.write().await;
                     data.average_roundtrip = average_roundtrip;
                     data.average_server_timestamp_delta = average_server_timestamp_delta;
-                    self.request(ServerRequest::Pong {
+                    self.server_request(ServerRequest::Pong {
                         original_timestamp: timestamp,
                         timestamp: current_timestamp(),
                     })
@@ -239,7 +239,7 @@ where
         Ok(())
     }
 
-    pub async fn request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
+    async fn server_request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
         let id = {
             let mut counter = REQUEST_COUNTER.get_or_init(|| Handle::new(0)).write().await;
             *counter = counter.wrapping_add(1);
@@ -247,6 +247,10 @@ where
         };
         self.data.sender.send(WsRequest { id, request }).await?;
         Ok(())
+    }
+
+    pub async fn request(&self, request: L::Request) -> anyhow::Result<()> {
+        self.server_request(ServerRequest::Request(request)).await
     }
 
     async fn send_loop(
@@ -258,7 +262,7 @@ where
         self.set_login_state(LoginState::Handshaking { config })
             .await?;
 
-        self.request(ServerRequest::Greetings {
+        self.server_request(ServerRequest::Greetings {
             protocol_version: protocol_version().to_string(),
             server_version: self.protocol_version().await.to_string(),
             installation_id,

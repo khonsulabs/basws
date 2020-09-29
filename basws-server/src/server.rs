@@ -421,6 +421,11 @@ where
             None => Ok(None),
         }
     }
+
+    pub async fn connected_clients(&self) -> Vec<ConnectedClient<L>> {
+        let data = self.data.clients.read().await;
+        data.clients.values().cloned().collect()
+    }
 }
 
 impl<L> Server<L>
