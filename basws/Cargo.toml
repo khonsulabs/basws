@@ -18,12 +18,14 @@ repository = "https://github.com/khonsulabs/basws"
 default = []
 server = ["basws-server"]
 client = ["basws-client"]
+yew = ["basws-yew"]
 persistent-server = ["basws-server/persistent-server"]
 
 [dependencies]
 basws-shared = { path = "../basws-shared", version = "0.1.0-dev-5" }
 basws-server = { path = "../basws-server", version = "0.1.0-dev-5", optional = true }
 basws-client = { path = "../basws-client", version = "0.1.0-dev-5", optional = true }
+basws-yew = { path = "../basws-yew", version = "0.1.0-dev-5", optional = true }
 
 [dev-dependencies]
 serde = "1"
