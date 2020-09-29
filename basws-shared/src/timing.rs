@@ -1,7 +1,11 @@
-use chrono::Utc;
-
+#[cfg(target_arch = "wasm32")]
 pub fn current_timestamp() -> f64 {
-    Utc::now().timestamp_nanos() as f64 / 1_000_000_000.0
+    js_sys::Date::new_0().get_time()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn current_timestamp() -> f64 {
+    chrono::Utc::now().timestamp_nanos() as f64 / 1_000_000_000.0
 }
 
 #[derive(Default)]
