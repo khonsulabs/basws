@@ -18,8 +18,13 @@ repository = "https://github.com/khonsulabs/basws"
 chrono = "0.4"
 serde = "1"
 serde_derive = "1"
-uuid = { version = "0.8", features = ["v4", "serde"] }
-rust-crypto = "0.2"
 rand = "0.7"
 semver = "0.11"
 thiserror = "1"
+sha2 = "0.9"
+
+[target.'cfg(target_arch="wasm32")'.dependencies]
+uuid = { version = "0.8", features = ["v4", "serde", "wasm-bindgen"] }
+
+[target.'cfg(not(target_arch="wasm32"))'.dependencies]
+uuid = { version = "0.8", features = ["v4", "serde"] }

@@ -18,10 +18,19 @@ pub struct WsRequest<T> {
     pub request: ServerRequest<T>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct WsBatchResponse<T> {
     pub request_id: Option<u64>,
     pub results: Vec<ServerResponse<T>>,
+}
+
+impl<T> Default for WsBatchResponse<T> {
+    fn default() -> Self {
+        Self {
+            request_id: None,
+            results: Vec::default(),
+        }
+    }
 }
 
 impl<T> WsBatchResponse<T> {
@@ -83,7 +92,7 @@ pub enum ServerError {
     IncompatibleVersion,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Eq, PartialEq)]
 pub struct InstallationConfig {
     pub id: Uuid,
     pub private_key: [u8; 32],

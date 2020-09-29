@@ -155,6 +155,7 @@ where
                 }
                 Err(err) => {
                     if let ErrorHandling::Disconnect = self.websocket_error(err).await {
+                        println!("Disconnecting");
                         break;
                     }
                 }
