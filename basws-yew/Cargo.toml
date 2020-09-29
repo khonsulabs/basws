@@ -1,0 +1,30 @@
+[package]
+name = "basws-yew"
+version = "0.1.0-dev-5"
+authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
+edition = "2018"
+description = "A yew-client for basws, a simple async WebSocket client/server framework"
+readme = "./README.md"
+license = "MIT"
+keywords = ["websocket", "yew"]
+categories = [
+    "web-programming::websocket",
+    "network-programming",
+    "asynchronous",
+    "wasm"
+]
+repository = "https://github.com/khonsulabs/basws"
+
+[dependencies]
+yew = { version = "0.17", features = ["cbor"] }
+basws-shared = { path = "../basws-shared", version = "0.1.0-dev-5" }
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+aes-gcm = "0.7"
+base64 = "0.12"
+aead = "0.3"
+url = "2"
+rand = { version = "0.7", features = ["wasm-bindgen"] }
+serde_cbor = "0.11"
+serde_json = "1"

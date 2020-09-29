@@ -1,2 +1,2 @@
 [workspace]
-members = ["basws-shared", "basws-server", "basws-client", "basws"]
+members = ["basws-shared", "basws-server", "basws-client", "basws", "basws-yew"]
