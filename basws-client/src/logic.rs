@@ -8,11 +8,14 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::fmt::Debug;
 use url::Url;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("server error: {0:?}")]
     Server(ServerError),
-    Cbor(serde_cbor::Error),
-    Websocket(tokio_tungstenite::tungstenite::Error),
+    #[error("serialization error")]
+    Cbor(#[from] serde_cbor::Error),
+    #[error("websocket error")]
+    Websocket(#[from] tokio_tungstenite::tungstenite::Error),
 }
 
 #[async_trait]
