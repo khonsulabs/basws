@@ -16,13 +16,17 @@ use basws_shared::{
 };
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url::Url;
 
 mod data;
-use data::{ClientData, NetworkState};
+mod waiter;
+use self::{
+    data::{ClientData, NetworkState},
+    waiter::PendingResponse,
+};
 
 static REQUEST_COUNTER: OnceCell<Handle<u64>> = OnceCell::new();
 
@@ -71,6 +75,7 @@ where
                     average_roundtrip: None,
                     average_server_timestamp_delta: None,
                 }),
+                mailboxes: RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -106,6 +111,20 @@ where
     pub async fn average_server_timestamp_delta(&self) -> Option<f64> {
         let network = self.data.state.read().await;
         network.average_server_timestamp_delta
+    }
+
+    pub async fn wait_for_response_to(
+        &self,
+        request_id: u64,
+    ) -> Result<Vec<L::Response>, async_channel::RecvError> {
+        let (sender, receiver) = async_channel::bounded(1);
+
+        {
+            let mut mailboxes = self.data.mailboxes.write().await;
+            mailboxes.insert(request_id, sender);
+        }
+
+        receiver.recv().await
     }
 
     async fn server_url(&self) -> Url {
@@ -192,6 +211,28 @@ where
         &self,
         batch: WsBatchResponse<L::Response>,
     ) -> anyhow::Result<()> {
+        if let Some(request_id) = batch.request_id {
+            let mut mailboxes = self.data.mailboxes.write().await;
+            if let Some(sender) = mailboxes.remove(&request_id) {
+                let _ = sender
+                    .send(
+                        batch
+                            .results
+                            .iter()
+                            .filter_map(|sr| {
+                                if let ServerResponse::Response(response) = sr {
+                                    Some(response)
+                                } else {
+                                    None
+                                }
+                            })
+                            .cloned()
+                            .collect(),
+                    )
+                    .await;
+            }
+        }
+
         for response in batch.results {
             match response {
                 ServerResponse::NewInstallation(config) => {
@@ -213,7 +254,7 @@ where
                     self.server_request(ServerRequest::ChallengeResponse(
                         challenge::compute_challenge(&config.private_key, &nonce),
                     ))
-                    .await?
+                    .await?;
                 }
                 ServerResponse::Ping {
                     average_roundtrip,
@@ -239,18 +280,19 @@ where
         Ok(())
     }
 
-    async fn server_request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<()> {
+    async fn server_request(&self, request: ServerRequest<L::Request>) -> anyhow::Result<u64> {
         let id = {
             let mut counter = REQUEST_COUNTER.get_or_init(|| Handle::new(0)).write().await;
             *counter = counter.wrapping_add(1);
             *counter
         };
         self.data.sender.send(WsRequest { id, request }).await?;
-        Ok(())
+        Ok(id)
     }
 
-    pub async fn request(&self, request: L::Request) -> anyhow::Result<()> {
-        self.server_request(ServerRequest::Request(request)).await
+    pub async fn request(&self, request: L::Request) -> anyhow::Result<PendingResponse<L>> {
+        let request_id = self.server_request(ServerRequest::Request(request)).await?;
+        Ok(PendingResponse::new(request_id, self.clone()))
     }
 
     async fn send_loop(

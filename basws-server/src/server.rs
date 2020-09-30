@@ -116,7 +116,7 @@ where
 
         let client = ConnectedClient::new(client, sender.clone());
         let _ = tokio::try_join!(
-            client.ping_loop(),
+            client.ping_loop(self.data.logic.ping_period()),
             self.receive_loop(client.clone(), rx, sender)
         );
     }

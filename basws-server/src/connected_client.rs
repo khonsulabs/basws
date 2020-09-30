@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::logic::ServerLogic;
 use async_channel::Sender;
 use async_handle::Handle;
@@ -108,8 +110,7 @@ where
         data.network_timing.update(original_timestamp, timestamp)
     }
 
-    // TODO: Ping duration should be configurable
-    pub(crate) async fn ping_loop(&self) -> anyhow::Result<()> {
+    pub(crate) async fn ping_loop(&self, ping_duration: Duration) -> anyhow::Result<()> {
         loop {
             let ping = {
                 let data = self.data.read().await;
@@ -128,7 +129,7 @@ where
             })
             .await?;
 
-            tokio::time::delay_for(tokio::time::Duration::from_secs_f32(1.)).await
+            tokio::time::delay_for(ping_duration).await
         }
     }
 }

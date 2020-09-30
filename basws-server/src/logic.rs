@@ -3,7 +3,7 @@ use async_handle::Handle;
 use async_trait::async_trait;
 use basws_shared::{protocol::InstallationConfig, Uuid, VersionReq};
 use serde::{de::DeserializeOwned, Serialize};
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, time::Duration};
 
 pub trait Identifiable {
     type Id: Copy + Hash + Eq + Send + Sync;
@@ -17,6 +17,10 @@ pub trait ServerLogic: Send + Sync {
     type Client: Send + Sync + Debug;
     type Account: Identifiable<Id = Self::AccountId> + Send + Sync + Debug;
     type AccountId: Copy + Hash + Eq + Send + Sync;
+
+    fn ping_period(&self) -> Duration {
+        Duration::from_secs(1)
+    }
 
     async fn handle_request(
         &self,
