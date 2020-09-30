@@ -23,9 +23,9 @@ Add either of these lines to your Cargo.toml:
 
 ```toml
 # Either use the basws parent crate
-basws = { version = ">=0.1.0-dev-5", features = ["server"] }
+basws = { version = ">=0.1.0-dev-6", features = ["server"] }
 # Or, use the basws-server crate
-basws-server = ">=0.1.0-dev-5"
+basws-server = ">=0.1.0-dev-6"
 ```
 
 ### Client
@@ -34,7 +34,7 @@ Add either of these lines to your Cargo.toml:
 
 ```toml
 # Either use the basws parent crate
-basws = { version = ">=0.1.0-dev-5", features = ["client"] }
+basws = { version = ">=0.1.0-dev-6", features = ["client"] }
 # Or, use the basws-client crate
-basws-client = ">=0.1.0-dev-5"
+basws-client = ">=0.1.0-dev-6"
 ```
