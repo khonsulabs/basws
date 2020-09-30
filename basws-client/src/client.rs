@@ -17,7 +17,7 @@ use basws_shared::{
 use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
 use once_cell::sync::OnceCell;
 use std::{collections::HashMap, sync::Arc};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url::Url;
 
@@ -184,10 +184,10 @@ where
         }
     }
 
-    async fn receive_loop(
-        &self,
-        mut rx: SplitStream<WebSocketStream<TcpStream>>,
-    ) -> anyhow::Result<()> {
+    async fn receive_loop<T>(&self, mut rx: SplitStream<WebSocketStream<T>>) -> anyhow::Result<()>
+    where
+        T: AsyncRead + AsyncWrite + Unpin,
+    {
         loop {
             match rx.next().await {
                 Some(Ok(Message::Binary(bytes))) => {
@@ -295,10 +295,13 @@ where
         Ok(PendingResponse::new(request_id, self.clone()))
     }
 
-    async fn send_loop(
+    async fn send_loop<T>(
         &self,
-        mut tx: SplitSink<WebSocketStream<TcpStream>, Message>,
-    ) -> anyhow::Result<()> {
+        mut tx: SplitSink<WebSocketStream<T>, Message>,
+    ) -> anyhow::Result<()>
+    where
+        T: AsyncRead + AsyncWrite + Unpin,
+    {
         let config = self.stored_installation_config().await;
         let installation_id = config.as_ref().map(|config| config.id);
         self.set_login_state(LoginState::Handshaking { config })

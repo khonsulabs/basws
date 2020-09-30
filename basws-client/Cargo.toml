@@ -14,6 +14,9 @@ categories = [
 ]
 repository = "https://github.com/khonsulabs/basws"
 
+[features]
+tls = ["tokio-tungstenite/tls"]
+
 [dependencies]
 tokio-tungstenite = "0.11"
 tokio = { version = "0.2", features = ["time", "macros"] }
