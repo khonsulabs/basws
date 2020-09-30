@@ -192,4 +192,12 @@ impl ServerLogic for ChatServer {
         );
         Ok(RequestHandling::Respond(ChatResponse::Unauthenticated))
     }
+
+    async fn client_disconnected(&self, client: &ConnectedClient<Self>) -> anyhow::Result<()> {
+        info!(
+            "Client disconnected: {}",
+            client.installation().await.unwrap().id
+        );
+        Ok(())
+    }
 }

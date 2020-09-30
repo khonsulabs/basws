@@ -47,6 +47,8 @@ pub trait ServerLogic: Send + Sync {
         client: &ConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
 
+    async fn client_disconnected(&self, client: &ConnectedClient<Self>) -> anyhow::Result<()>;
+
     async fn new_client_connected(
         &self,
         client: &ConnectedClient<Self>,

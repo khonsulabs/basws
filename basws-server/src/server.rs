@@ -162,7 +162,7 @@ where
             }
         }
 
-        self.disconnect(client).await;
+        self.disconnect(client).await?;
 
         // For try_join to exit early, we need to return an Err, even though everything is "fine"
         anyhow::bail!("Disconnected")
@@ -231,14 +231,15 @@ where
         self.data.logic.handle_websocket_error(error).await
     }
 
-    async fn disconnect(&self, client: ConnectedClient<L>) {
+    async fn disconnect(&self, client: ConnectedClient<L>) -> anyhow::Result<()> {
         if let Some(installation) = client.installation().await {
+            self.data.logic.client_disconnected(&client).await?;
             let mut data = self.data.clients.write().await;
 
             data.clients.remove(&installation.id);
             let account_id = match data.account_by_installation.get(&installation.id) {
                 Some(account_id) => *account_id,
-                None => return,
+                None => return Ok(()),
             };
             data.account_by_installation.remove(&installation.id);
 
@@ -257,6 +258,7 @@ where
                 accounts_by_id.remove(&account_id);
             }
         }
+        Ok(())
     }
 
     async fn handle_request(
@@ -596,6 +598,10 @@ mod tests {
         ) -> anyhow::Result<RequestHandling<Self::Response>> {
             unimplemented!()
         }
+
+        async fn client_disconnected(&self, _client: &ConnectedClient<Self>) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     #[async_test]
@@ -664,7 +670,7 @@ mod tests {
             assert_eq!(1, accounts.len());
         }
 
-        server.disconnect(client_no_account).await;
+        server.disconnect(client_no_account).await?;
 
         {
             let data = server.data.clients.read().await;
@@ -676,7 +682,7 @@ mod tests {
             assert_eq!(1, accounts.len());
         }
 
-        server.disconnect(client_has_account).await;
+        server.disconnect(client_has_account).await?;
 
         {
             let data = server.data.clients.read().await;

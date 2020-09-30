@@ -165,4 +165,15 @@ impl PersistentServerLogic for ChatServer {
         );
         Ok(RequestHandling::Respond(ChatResponse::Unauthenticated))
     }
+
+    async fn client_disconnected(
+        &self,
+        client: &PersistentConnectedClient<Self>,
+    ) -> anyhow::Result<()> {
+        info!(
+            "Client disconnected: {}",
+            client.installation().await.unwrap().id
+        );
+        Ok(())
+    }
 }

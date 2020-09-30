@@ -36,6 +36,11 @@ pub trait PersistentServerLogic: Send + Sync + 'static {
         &self,
         client: &PersistentConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>;
+
+    async fn client_disconnected(
+        &self,
+        client: &PersistentConnectedClient<Self>,
+    ) -> anyhow::Result<()>;
 }
 
 pub struct PersistentServer<L: ?Sized>
@@ -134,6 +139,13 @@ where
         client: &ConnectedClient<Self>,
     ) -> anyhow::Result<RequestHandling<Self::Response>>{
         self.logic.client_reconnected(client).await
+    }
+
+    async fn client_disconnected(
+        &self,
+        client: &ConnectedClient<Self>,
+    ) -> anyhow::Result<()>{
+        self.logic.client_disconnected(client).await
     }
 
     async fn new_client_connected(
