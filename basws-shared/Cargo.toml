@@ -1,6 +1,6 @@
 [package]
 name = "basws-shared"
-version = "0.1.0-dev-6"
+version = "0.1.0-dev-7"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
 description = "A simple async WebSocket client/server framework"
