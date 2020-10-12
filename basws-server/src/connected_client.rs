@@ -65,9 +65,17 @@ where
         }
     }
 
-    pub async fn send(&self, response: WsBatchResponse<L::Response>) -> anyhow::Result<()> {
+    pub(crate) async fn send(&self, response: WsBatchResponse<L::Response>) -> anyhow::Result<()> {
         let data = self.data.read().await;
         Ok(data.sender.send(response).await?)
+    }
+
+    pub async fn send_response(&self, response: L::Response) -> anyhow::Result<()> {
+        let data = self.data.read().await;
+        Ok(data
+            .sender
+            .send(WsBatchResponse::from_response(response))
+            .await?)
     }
 
     pub async fn installation(&self) -> Option<InstallationConfig> {
@@ -83,6 +91,18 @@ where
     pub async fn client(&self) -> Handle<L::Client> {
         let data = self.data.read().await;
         data.client.clone()
+    }
+
+    pub async fn map_client<F: FnOnce(&L::Client) -> R, R>(&self, map_fn: F) -> R {
+        let data = self.data.read().await;
+        let client = data.client.read().await;
+        map_fn(&client)
+    }
+
+    pub async fn map_client_mut<F: FnOnce(&mut L::Client) -> R, R>(&self, map_fn: F) -> R {
+        let data = self.data.read().await;
+        let mut client = data.client.write().await;
+        map_fn(&mut client)
     }
 
     pub async fn account(&self) -> Option<Handle<L::Account>> {
