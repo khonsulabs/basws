@@ -136,7 +136,11 @@ where
                             match self.handle_request(&client, ws_request).await {
                                 Ok(responses) => {
                                     if let Some(batch) = responses.into_batch(Some(request_id)) {
-                                        if sender.send(batch).await.is_err() {
+                                        if let Err(err) = sender.send(batch).await {
+                                            error!(
+                                                "Error sending response, disconnecting. {:?}",
+                                                err
+                                            );
                                             break;
                                         }
                                     }
@@ -349,7 +353,23 @@ where
 
                     self.data.logic.client_reconnected(client_handle).await?
                 } else {
-                    self.data.logic.new_client_connected(client_handle).await?
+                    // Failed the challenge, treat them as a new client.
+                    let config = self
+                        .data
+                        .logic
+                        .lookup_or_create_installation(client_handle, None)
+                        .await?;
+                    let new_installation_response = self
+                        .data
+                        .logic
+                        .new_client_connected(client_handle)
+                        .await?
+                        .into_server_handling();
+
+                    return Ok(
+                        ServerRequestHandling::Respond(ServerResponse::NewInstallation(config))
+                            + new_installation_response,
+                    );
                 };
                 Ok(ServerRequestHandling::Respond(ServerResponse::Connected {
                     installation_id: installation.id,
