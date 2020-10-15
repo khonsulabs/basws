@@ -8,3 +8,9 @@ pub enum LoginState {
     Connected { installation_id: Uuid },
     Error { message: Option<String> },
 }
+
+impl Default for LoginState {
+    fn default() -> Self {
+        LoginState::Disconnected
+    }
+}
