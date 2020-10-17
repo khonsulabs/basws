@@ -61,4 +61,11 @@ pub trait ServerLogic: Send + Sync {
     async fn handle_websocket_error(&self, _err: warp::Error) -> ErrorHandling {
         ErrorHandling::Disconnect
     }
+
+    async fn client_timings_updated(
+        &self,
+        _client: &ConnectedClient<Self>,
+    ) -> anyhow::Result<RequestHandling<Self::Response>> {
+        Ok(RequestHandling::NoResponse)
+    }
 }

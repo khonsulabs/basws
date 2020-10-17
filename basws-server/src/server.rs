@@ -269,7 +269,7 @@ where
         &self,
         client_handle: &ConnectedClient<L>,
         ws_request: WsRequest<L::Request>,
-    ) -> Result<ServerRequestHandling<L::Response>, anyhow::Error> {
+    ) -> anyhow::Result<ServerRequestHandling<L::Response>> {
         match ws_request.request {
             ServerRequest::Greetings {
                 protocol_version,
@@ -382,7 +382,10 @@ where
                 client_handle
                     .update_network_timing(original_timestamp, timestamp)
                     .await;
-                Ok(ServerRequestHandling::NoResponse)
+                self.logic()
+                    .client_timings_updated(client_handle)
+                    .await
+                    .map(|r| r.into_server_handling())
             }
             ServerRequest::Request(request) => self
                 .data
