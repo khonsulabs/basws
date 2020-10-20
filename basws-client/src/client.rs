@@ -167,7 +167,7 @@ where
             let reconnect_delay = match connect_async(url).await {
                 Ok((ws, _)) => {
                     let (tx, rx) = ws.split();
-                    let _ = tokio::try_join!(self.send_loop(tx), self.receive_loop(rx));
+                    tokio::try_join!(self.send_loop(tx), self.receive_loop(rx))?;
                     None
                 }
                 Err(err) => {
