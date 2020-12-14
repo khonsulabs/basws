@@ -14,3 +14,9 @@ impl Default for LoginState {
         LoginState::Disconnected
     }
 }
+
+impl LoginState {
+    pub fn is_connected(&self) -> bool {
+        matches!(self, LoginState::Connected { .. })
+    }
+}

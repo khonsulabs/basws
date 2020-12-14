@@ -14,7 +14,10 @@ use basws_shared::{
     timing::current_timestamp,
     Version,
 };
-use futures::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
+use futures::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
 use once_cell::sync::OnceCell;
 use std::{collections::HashMap, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -167,6 +170,7 @@ where
             let reconnect_delay = match connect_async(url).await {
                 Ok((ws, _)) => {
                     let (tx, rx) = ws.split();
+                    // TODO these errors should funnel through handle_error so that they can be gracefully ignored and the websocket run loop can continue
                     tokio::try_join!(self.send_loop(tx), self.receive_loop(rx))?;
                     None
                 }
