@@ -224,7 +224,7 @@ where
         installations.insert(installation_id);
 
         if let Some(client) = data.clients.get_mut(&installation_id) {
-            client.set_account(account.clone()).await;
+            client.set_account(account).await;
             self.data.logic.account_associated(client).await?
         }
 
