@@ -3,3 +3,4 @@
 /client*.json
 *.sleddb
 Cargo.lock
+.idea/

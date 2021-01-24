@@ -1,6 +1,6 @@
 [package]
 name = "basws-server"
-version = "0.1.0-dev-8"
+version = "0.1.0"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
 description = "A simple async WebSocket client/server framework"
@@ -19,16 +19,16 @@ default = []
 persistent-server = ["sled"]
 
 [dependencies]
-warp = "0.2"
+warp = "0.3"
 futures = "0.3"
 async-rwlock = "1"
 async-handle = "0.1"
 async-channel = "1"
-basws-shared = { path = "../basws-shared", version = "0.1.0-dev-8" }
+basws-shared = { path = "../basws-shared", version = "0.1.0" }
 anyhow = "1"
 serde = "1"
 serde_derive = "1"
-tokio = { version = "0.2", features = ["macros"] }
+tokio = { version = "1.0", features = ["macros", "time"] }
 serde_cbor = "0.11"
 async-trait = "0.1"
 sled = { version = "0.34", optional = true }

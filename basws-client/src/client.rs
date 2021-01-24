@@ -183,7 +183,7 @@ where
             self.set_login_state(LoginState::Disconnected).await?;
 
             if let Some(delay) = reconnect_delay {
-                tokio::time::delay_for(delay).await
+                tokio::time::sleep(delay).await
             }
         }
     }

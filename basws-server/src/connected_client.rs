@@ -149,7 +149,7 @@ where
             })
             .await?;
 
-            tokio::time::delay_for(ping_duration).await
+            tokio::time::sleep(ping_duration).await
         }
     }
 }
