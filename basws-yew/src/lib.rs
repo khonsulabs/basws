@@ -422,7 +422,7 @@ impl ClientState {
 
 #[cfg(not(debug_assertions))]
 fn encryption_key() -> &'static str {
-    std::env!("NCOG_CLIENT_ENCRYPTION_KEY")
+    std::env!("BASWS_CLIENT_ENCRYPTION_KEY")
 }
 
 #[cfg(debug_assertions)]
