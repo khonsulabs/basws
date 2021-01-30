@@ -5,11 +5,11 @@ use std::convert::TryInto;
 use uuid::Uuid;
 
 pub fn protocol_version() -> Version {
-    Version::parse("0.1.0-dev-1").unwrap()
+    Version::parse("0.1.1").unwrap()
 }
 
 pub fn protocol_version_requirements() -> VersionReq {
-    VersionReq::parse("=0.1.0-dev-1").unwrap()
+    VersionReq::parse("=0.1").unwrap()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

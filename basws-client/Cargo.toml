@@ -1,6 +1,6 @@
 [package]
 name = "basws-client"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
 description = "A simple async WebSocket client/server framework"
@@ -23,7 +23,7 @@ tokio = { version = "1.0", features = ["time", "macros", "rt"] }
 async-handle = "0.1"
 async-channel = "1"
 async-rwlock = "1"
-basws-shared = { path = "../basws-shared", version = "0.1.0" }
+basws-shared = { path = "../basws-shared", version = "0.1.1" }
 async-trait = "0.1"
 serde = "1"
 serde_cbor = "0.11"
