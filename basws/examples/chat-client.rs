@@ -42,7 +42,7 @@ async fn random_chat_loop(client: Client<ChatClient>) {
         }
         let sleep_time = {
             let mut rng = thread_rng();
-            rng.gen_range(500, 2000)
+            rng.gen_range(500..2000)
         };
         trace!("Sleeping for {} before sending next message", sleep_time);
         tokio::time::sleep(tokio::time::Duration::from_millis(sleep_time)).await
