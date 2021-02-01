@@ -1,8 +1,12 @@
-use crate::{connected_client::ConnectedClient, Identifiable, ServerLogic};
+use std::{collections::HashMap, collections::HashSet, sync::Arc};
+
 use async_channel::Sender;
 use async_handle::Handle;
 use async_rwlock::RwLock;
 use async_trait::async_trait;
+use futures::{stream::SplitStream, SinkExt, StreamExt};
+use warp::ws::Message;
+
 use basws_shared::{
     challenge,
     protocol::{
@@ -11,9 +15,8 @@ use basws_shared::{
     },
     Uuid, Version,
 };
-use futures::{stream::SplitStream, SinkExt, StreamExt};
-use std::{collections::HashMap, collections::HashSet, sync::Arc};
-use warp::ws::Message;
+
+use crate::{connected_client::ConnectedClient, Identifiable, ServerLogic};
 
 #[async_trait]
 pub(crate) trait ServerPublicApi: Send + Sync {
@@ -54,7 +57,7 @@ struct ClientData<L>
 where
     L: ServerLogic + ?Sized,
 {
-    clients: HashMap<Uuid, ConnectedClient<L>>,
+    clients: HashMap<Uuid, Vec<ConnectedClient<L>>>,
     installations_by_account: HashMap<L::AccountId, HashSet<Uuid>>,
     account_by_installation: HashMap<Uuid, L::AccountId>,
 }
@@ -185,8 +188,13 @@ where
 
     pub async fn send_to_installation_id(&self, installation_id: Uuid, response: L::Response) {
         let data = self.data.clients.read().await;
-        if let Some(client) = data.clients.get(&installation_id) {
-            let _ = client.send(WsBatchResponse::from_response(response)).await;
+        if let Some(clients) = data.clients.get(&installation_id) {
+            let _ = futures::future::join_all(
+                clients
+                    .iter()
+                    .map(|client| client.send(WsBatchResponse::from_response(response.clone()))),
+            )
+            .await;
         }
     }
 
@@ -195,9 +203,10 @@ where
         if let Some(clients) = data.installations_by_account.get(&account_id) {
             for installation_id in clients {
                 if let Some(client) = data.clients.get(&installation_id) {
-                    let _ = client
-                        .send(WsBatchResponse::from_response(response.clone()))
-                        .await;
+                    let _ = futures::future::join_all(client.iter().map(|client| {
+                        client.send(WsBatchResponse::from_response(response.clone()))
+                    }))
+                    .await;
                 }
             }
         }
@@ -223,9 +232,11 @@ where
             .or_insert_with(HashSet::new);
         installations.insert(installation_id);
 
-        if let Some(client) = data.clients.get_mut(&installation_id) {
-            client.set_account(account).await;
-            self.data.logic.account_associated(client).await?
+        if let Some(clients) = data.clients.get_mut(&installation_id) {
+            for client in clients.iter_mut() {
+                client.set_account(account.clone()).await;
+                self.data.logic.account_associated(client).await?
+            }
         }
 
         Ok(())
@@ -418,7 +429,10 @@ where
 
     async fn connect(&self, installation: InstallationConfig, client: &ConnectedClient<L>) {
         let mut data = self.data.clients.write().await;
-        data.clients.insert(installation.id, client.clone());
+        data.clients
+            .entry(installation.id)
+            .and_modify(|clients| clients.push(client.clone()))
+            .or_insert_with(|| vec![client.clone()]);
         {
             client.set_installation(installation).await;
         }
@@ -450,7 +464,7 @@ where
 
     pub async fn connected_clients(&self) -> Vec<ConnectedClient<L>> {
         let data = self.data.clients.read().await;
-        data.clients.values().cloned().collect()
+        data.clients.values().cloned().flatten().collect()
     }
 }
 
@@ -541,12 +555,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::logic::ServerLogic;
     use async_trait::async_trait;
-    use basws_shared::VersionReq;
     use maplit::hashmap;
     use serde_derive::{Deserialize, Serialize};
+
+    use basws_shared::VersionReq;
+
+    use crate::logic::ServerLogic;
+
+    use super::*;
 
     struct TestServer {
         logged_in_installations: HashMap<Uuid, Option<i64>>,
