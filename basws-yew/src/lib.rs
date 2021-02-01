@@ -232,19 +232,19 @@ where
                 self.update(Message::Reset);
             }
             AgentMessage::QueryStorageStatus => {
-                self.link
+                self
                     .respond(who, AgentResponse::StorageStatus(self.storage_enabled));
             }
             AgentMessage::EnableStorage => {
                 self.storage_enabled = true;
                 self.save_login_state();
-                self.link
+                self
                     .respond(who, AgentResponse::StorageStatus(self.storage_enabled));
             }
             AgentMessage::DisableStorage => {
                 self.storage_enabled = false;
                 self.save_login_state();
-                self.link
+                self
                     .respond(who, AgentResponse::StorageStatus(self.storage_enabled));
             }
         }
@@ -336,9 +336,16 @@ where
         }
     }
 
+    fn respond(&self, who: HandlerId, response: AgentResponse<T::Response>) {
+        if who.is_respondable() {
+            self.link
+                .respond(who, response);
+        }
+    }
+
     fn broadcast(&self, response: AgentResponse<T::Response>) {
         for entry in self.broadcasts.iter() {
-            self.link.respond(*entry, response.clone());
+            self.respond(*entry, response.clone());
         }
     }
 
@@ -362,7 +369,7 @@ where
         self.broadcast(AgentResponse::Response(response.clone()));
         if let Some(request_id) = request_id {
             if let Some(who) = self.callbacks.get(&request_id) {
-                self.link
+                self
                     .respond(*who, AgentResponse::Response(response.clone()));
             };
         }
