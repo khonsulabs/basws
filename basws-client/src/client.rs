@@ -6,7 +6,7 @@ use async_channel::Receiver;
 use async_handle::Handle;
 use async_rwlock::RwLock;
 use basws_shared::{
-    challenge,
+    challenge, compression,
     protocol::{
         protocol_version, InstallationConfig, ServerRequest, ServerResponse, WsBatchResponse,
         WsRequest,
@@ -194,14 +194,12 @@ where
     {
         loop {
             match rx.next().await {
-                Some(Ok(Message::Binary(bytes))) => {
-                    match serde_cbor::from_slice::<WsBatchResponse<L::Response>>(&bytes) {
-                        Ok(response) => self.handle_batch_response(response).await?,
-                        Err(error) => {
-                            self.handle_error(Error::Cbor(error)).await?;
-                        }
+                Some(Ok(Message::Binary(bytes))) => match compression::decompress(&bytes) {
+                    Ok(response) => self.handle_batch_response(response).await?,
+                    Err(error) => {
+                        self.handle_error(Error::Compression(error)).await?;
                     }
-                }
+                },
                 Some(Err(err)) => return Err(anyhow::Error::from(err)),
                 None => {
                     anyhow::bail!("Disconnected on read");
@@ -321,11 +319,8 @@ where
         let receiver = self.receiver().await;
         loop {
             let request = receiver.recv().await?;
-
-            if let Err(err) = tx
-                .send(Message::Binary(serde_cbor::to_vec(&request).unwrap()))
-                .await
-            {
+            let bytes = compression::compress(&request);
+            if let Err(err) = tx.send(Message::Binary(bytes)).await {
                 return Err(anyhow::Error::from(err));
             }
         }

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use async_channel::Sender;
 use async_handle::Handle;
@@ -8,7 +11,7 @@ use futures::{stream::SplitStream, SinkExt, StreamExt};
 use warp::ws::Message;
 
 use basws_shared::{
-    challenge,
+    challenge, compression,
     protocol::{
         protocol_version_requirements, InstallationConfig, ServerError, ServerRequest,
         ServerResponse, WsBatchResponse, WsRequest,
@@ -111,9 +114,8 @@ where
 
         tokio::spawn(async move {
             while let Ok(response) = transmission_receiver.recv().await {
-                tx.send(Message::binary(serde_cbor::to_vec(&response).unwrap()))
-                    .await
-                    .unwrap_or_default()
+                let bytes = compression::compress(&response);
+                tx.send(Message::binary(bytes)).await.unwrap_or_default()
             }
         });
 
@@ -122,6 +124,8 @@ where
             client.ping_loop(self.data.logic.ping_period()),
             self.receive_loop(client.clone(), rx, sender)
         );
+
+        let _ = self.disconnect(client).await;
     }
 
     async fn receive_loop(
@@ -133,7 +137,7 @@ where
         while let Some(result) = rx.next().await {
             match result {
                 Ok(message) => {
-                    match serde_cbor::from_slice::<WsRequest<L::Request>>(message.as_bytes()) {
+                    match compression::decompress::<WsRequest<L::Request>>(message.as_bytes()) {
                         Ok(ws_request) => {
                             let request_id = ws_request.id;
                             match self.handle_request(&client, ws_request).await {
@@ -154,8 +158,8 @@ where
                                 }
                             }
                         }
-                        Err(cbor_error) => {
-                            error!("Error decoding cbor {:?}", cbor_error);
+                        Err(error) => {
+                            error!("Error decoding message {:?}", error);
                             break;
                         }
                     }
@@ -168,8 +172,6 @@ where
                 }
             }
         }
-
-        self.disconnect(client).await?;
 
         // For try_join to exit early, we need to return an Err, even though everything is "fine"
         anyhow::bail!("Disconnected")

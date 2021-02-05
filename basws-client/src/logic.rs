@@ -1,6 +1,7 @@
 use crate::{client::Client, login_state::LoginState};
 use async_trait::async_trait;
 use basws_shared::{
+    compression,
     protocol::{InstallationConfig, ServerError},
     Version,
 };
@@ -12,8 +13,8 @@ use url::Url;
 pub enum Error {
     #[error("server error: {0:?}")]
     Server(ServerError),
-    #[error("serialization error")]
-    Cbor(#[from] serde_cbor::Error),
+    #[error("compression error")]
+    Compression(#[from] compression::Error),
     #[error("websocket error")]
     Websocket(#[from] tokio_tungstenite::tungstenite::Error),
 }

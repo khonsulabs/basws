@@ -1,6 +1,9 @@
 use basws_shared::{
-    challenge, prelude::InstallationConfig, prelude::ServerError, protocol,
-    timing::current_timestamp, Version,
+    challenge, compression,
+    prelude::{InstallationConfig, ServerError},
+    protocol,
+    timing::current_timestamp,
+    Version,
 };
 use rand::{thread_rng, Rng};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -10,15 +13,15 @@ use std::{
 };
 use thiserror::Error;
 use url::Url;
-use yew::prelude::*;
-use yew::worker::*;
 use yew::{
     format::Json,
+    prelude::*,
     services::{
         storage::{Area, StorageService},
         timeout::{TimeoutService, TimeoutTask},
         websocket::{WebSocketService, WebSocketStatus, WebSocketTask},
     },
+    worker::*,
 };
 
 pub enum Message<T> {
@@ -232,20 +235,17 @@ where
                 self.update(Message::Reset);
             }
             AgentMessage::QueryStorageStatus => {
-                self
-                    .respond(who, AgentResponse::StorageStatus(self.storage_enabled));
+                self.respond(who, AgentResponse::StorageStatus(self.storage_enabled));
             }
             AgentMessage::EnableStorage => {
                 self.storage_enabled = true;
                 self.save_login_state();
-                self
-                    .respond(who, AgentResponse::StorageStatus(self.storage_enabled));
+                self.respond(who, AgentResponse::StorageStatus(self.storage_enabled));
             }
             AgentMessage::DisableStorage => {
                 self.storage_enabled = false;
                 self.save_login_state();
-                self
-                    .respond(who, AgentResponse::StorageStatus(self.storage_enabled));
+                self.respond(who, AgentResponse::StorageStatus(self.storage_enabled));
             }
         }
     }
@@ -265,7 +265,7 @@ where
     }
 }
 
-use yew::format::{Binary, Cbor, Text};
+use yew::format::{Binary, Text};
 #[derive(Debug)]
 pub struct WsMessageProxy<T>(pub T);
 
@@ -281,7 +281,7 @@ where
 #[derive(Debug, Error)]
 enum WsMessageError {
     #[error("error decoding bincode")]
-    Serialization(#[from] serde_cbor::Error),
+    Serialization(#[from] compression::Error),
 }
 
 impl<T> From<Binary> for WsMessageProxy<Result<T, anyhow::Error>>
@@ -290,7 +290,7 @@ where
 {
     fn from(bytes: Binary) -> Self {
         match bytes {
-            Ok(bytes) => WsMessageProxy(match serde_cbor::from_slice(bytes.as_slice()) {
+            Ok(bytes) => WsMessageProxy(match compression::decompress(&bytes) {
                 Ok(result) => Ok(result),
                 Err(err) => Err(WsMessageError::Serialization(err).into()),
             }),
@@ -328,18 +328,17 @@ where
                 if let Some(who) = who {
                     self.callbacks.insert(self.ws_request_id, who);
                 }
-                websocket.send_binary(Cbor(&protocol::WsRequest {
+                websocket.send_binary(Ok(compression::compress(&protocol::WsRequest {
                     id: self.ws_request_id,
                     request,
-                }));
+                })));
             }
         }
     }
 
     fn respond(&self, who: HandlerId, response: AgentResponse<T::Response>) {
         if who.is_respondable() {
-            self.link
-                .respond(who, response);
+            self.link.respond(who, response);
         }
     }
 
@@ -369,8 +368,7 @@ where
         self.broadcast(AgentResponse::Response(response.clone()));
         if let Some(request_id) = request_id {
             if let Some(who) = self.callbacks.get(&request_id) {
-                self
-                    .respond(*who, AgentResponse::Response(response.clone()));
+                self.respond(*who, AgentResponse::Response(response.clone()));
             };
         }
 
@@ -479,8 +477,6 @@ impl EncryptedLoginInformation {
 pub use basws_shared as shared;
 
 pub mod prelude {
+    pub use super::{AgentMessage, AgentResponse, ClientLogic, ClientState, Message};
     pub use basws_shared::prelude::*;
-    pub use super::{
-        Message, ClientState, ClientLogic,AgentMessage, AgentResponse
-    };
 }

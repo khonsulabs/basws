@@ -1,6 +1,6 @@
 [package]
 name = "basws-shared"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
 description = "A simple async WebSocket client/server framework"
@@ -21,6 +21,9 @@ rand = "0.8"
 semver = "0.11"
 thiserror = "1"
 sha2 = "0.9"
+lz4_flex = "0.7"
+serde_cbor = "0.11"
+log = "0.4"
 
 [target.'cfg(target_arch="wasm32")'.dependencies]
 uuid = { version = "0.8", features = ["v4", "serde", "wasm-bindgen"] }

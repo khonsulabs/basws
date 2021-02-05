@@ -3,6 +3,7 @@ pub mod protocol;
 pub mod timing;
 pub use semver::{Version, VersionReq};
 pub use uuid::Uuid;
+pub mod compression;
 
 pub mod prelude {
     pub use crate::protocol::{InstallationConfig, ServerError};
