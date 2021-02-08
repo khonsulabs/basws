@@ -37,6 +37,7 @@ pub enum AgentResponse<T> {
     Disconnected,
     Response(T),
     StorageStatus(bool),
+    RoundtripUpdated(f64),
 }
 
 pub struct ApiAgent<T>
@@ -55,6 +56,7 @@ where
     storage: StorageService,
     auth_state: ClientState,
     storage_enabled: bool,
+    average_roundtrip: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -125,6 +127,7 @@ where
             storage,
             auth_state,
             storage_enabled,
+            average_roundtrip: None,
         }
     }
 
@@ -162,13 +165,19 @@ where
                             ),
                             None,
                         ),
-                        protocol::ServerResponse::Ping { timestamp, .. } => self.ws_send(
-                            protocol::ServerRequest::Pong {
-                                original_timestamp: timestamp,
-                                timestamp: current_timestamp(),
-                            },
-                            None,
-                        ),
+                        protocol::ServerResponse::Ping { timestamp, average_roundtrip, ..} => {
+                            self.average_roundtrip = average_roundtrip;
+                            self.ws_send(
+                                protocol::ServerRequest::Pong {
+                                    original_timestamp: timestamp,
+                                    timestamp: current_timestamp(),
+                                },
+                                None,
+                            );
+                            if let Some(average_roundtrip) = average_roundtrip {
+                                self.broadcast(AgentResponse::RoundtripUpdated(average_roundtrip));
+                            }
+                        },
                         protocol::ServerResponse::NewInstallation(config) => {
                             self.auth_state.installation = Some(config);
                             self.save_login_state();
