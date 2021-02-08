@@ -1,6 +1,6 @@
 [package]
 name = "basws-yew"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Jonathan Johnson <jon@khonsulabs.com>"]
 edition = "2018"
 description = "A yew-client for basws, a simple async WebSocket client/server framework"
@@ -17,7 +17,7 @@ repository = "https://github.com/khonsulabs/basws"
 
 [dependencies]
 yew = { version = "0.17", features = ["cbor"] }
-basws-shared = { path = "../basws-shared", version = "0.1.3" }
+basws-shared = { path = "../basws-shared", version = "0.1.4" }
 anyhow = "1"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
